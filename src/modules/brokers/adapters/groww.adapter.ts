@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { env } from '../../../config/env';
 import { BaseHttpAdapter } from './baseHttp.adapter';
 import {
@@ -20,9 +21,16 @@ import {
  * that key/secret into our "Connect Groww" form; we exchange it here and
  * only ever persist the resulting encrypted access token.
  *
- * Docs: https://groww.in/trade-api/docs (verify exact field names against
- * the latest published spec before going live — Groww's public API is newer
- * and field names may change between versions).
+ * Docs: https://groww.in/trade-api/docs — token exchange is
+ * `POST /v1/token/api/access` (NOT `/v1/token/api/create`, which doesn't
+ * exist and returns a 404 "route not found" from Groww's side). The
+ * "API key + secret" approval flow requires the API key as a Bearer token
+ * on the request, plus a `checksum` = SHA-256(apiSecret + timestamp) and
+ * the same epoch-second `timestamp`, per Groww's "How to Generate a
+ * Checksum" docs. This flow also requires the user to have approved the
+ * key for API access from the Groww web console beforehand — an
+ * unapproved key/secret pair will still fail here with a Groww-side error,
+ * which is expected and not a bug in this code.
  */
 export class GrowwAdapter extends BaseHttpAdapter implements BrokerAdapter {
   public readonly brokerName = 'groww';
@@ -39,13 +47,20 @@ export class GrowwAdapter extends BaseHttpAdapter implements BrokerAdapter {
     return { Authorization: `Bearer ${this.accessToken}` };
   }
 
+  private static buildChecksum(apiSecret: string, timestamp: string): string {
+    return crypto.createHash('sha256').update(apiSecret + timestamp).digest('hex');
+  }
+
   async connect(credentials: BrokerCredentials) {
     const apiKey = String(credentials.apiKey || this.apiKey);
     const apiSecret = String(credentials.apiSecret || '');
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const checksum = GrowwAdapter.buildChecksum(apiSecret, timestamp);
 
-    const data = await this.request<any>('/v1/token/api/create', {
+    const data = await this.request<any>('/v1/token/api/access', {
       method: 'POST',
-      body: { key: apiKey, secret: apiSecret },
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: { key_type: 'approval', checksum, timestamp },
     });
 
     this.apiKey = apiKey;

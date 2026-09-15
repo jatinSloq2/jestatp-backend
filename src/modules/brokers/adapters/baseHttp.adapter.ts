@@ -41,9 +41,22 @@ export abstract class BaseHttpAdapter {
     }
 
     if (!response.ok) {
+      // Broker APIs vary in how they shape error bodies — try the common
+      // field names before falling back to the generic HTTP status text, so
+      // the actual reason (e.g. "Invalid Access Token", "route not found")
+      // reaches the user instead of being swallowed.
+      const upstreamMessage =
+        (json as any)?.message ??
+        (json as any)?.error?.message ??
+        (json as any)?.error_message ??
+        (json as any)?.remark ??
+        (typeof json === 'string' ? json : undefined);
+
       throw new ApiError(
         response.status >= 500 ? 502 : 400,
-        `Broker API error (${response.status}): ${response.statusText}`,
+        upstreamMessage
+          ? `Broker API error (${response.status}): ${upstreamMessage}`
+          : `Broker API error (${response.status}): ${response.statusText}`,
         json,
       );
     }

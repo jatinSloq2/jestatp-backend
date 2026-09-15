@@ -4,14 +4,17 @@ import { validate } from '../../middlewares/validate.middleware';
 import { requireAuth } from '../../middlewares/auth.middleware';
 import { authLimiter } from '../../middlewares/rateLimiters';
 import {
+  forgotPasswordSchema,
   loginSchema,
   login2faVerifySchema,
   refreshSchema,
   registerSchema,
   resendEmailVerificationSchema,
+  resetPasswordSchema,
   verifyEmailSchema,
 } from './auth.validation';
 import {
+  forgotPasswordHandler,
   googleCallbackHandler,
   googleFailureHandler,
   listSessionsHandler,
@@ -23,6 +26,7 @@ import {
   registerHandler,
   resendEmailVerificationHandler,
   resendLogin2faHandler,
+  resetPasswordHandler,
   verifyEmailHandler,
   verifyLogin2faHandler,
 } from './auth.controller';
@@ -204,6 +208,56 @@ router.post('/login/2fa/verify', validate(login2faVerifySchema), verifyLogin2faH
  *       200: { description: A new code was sent }
  */
 router.post('/login/2fa/resend', resendLogin2faHandler);
+
+/**
+ * @openapi
+ * /auth/forgot-password:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Request a password reset link by email
+ *     description: >
+ *       Always responds 200 with the same generic message, whether or not the
+ *       email belongs to an account — this avoids leaking which emails are
+ *       registered. If a local (non-Google) account exists, a time-limited
+ *       reset link is emailed (logged to console in dev if SMTP isn't configured).
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email]
+ *             properties:
+ *               email: { type: string, format: email }
+ *     responses:
+ *       200: { description: Generic acknowledgement (see description) }
+ */
+router.post('/forgot-password', validate(forgotPasswordSchema), forgotPasswordHandler);
+
+/**
+ * @openapi
+ * /auth/reset-password:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Set a new password using the token from the emailed reset link
+ *     description: >
+ *       On success, the token is consumed (single use) and every other active
+ *       session/refresh token for the account is revoked as a precaution.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token, password]
+ *             properties:
+ *               token: { type: string, description: The token query param from the reset link }
+ *               password: { type: string, format: password, minLength: 8 }
+ *     responses:
+ *       200: { description: Password reset — all sessions revoked }
+ *       400: { description: Invalid or expired reset link }
+ */
+router.post('/reset-password', validate(resetPasswordSchema), resetPasswordHandler);
 
 /**
  * @openapi

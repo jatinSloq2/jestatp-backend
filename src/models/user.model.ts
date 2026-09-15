@@ -23,6 +23,11 @@ export interface UserAttributes {
   emailVerificationOtpExpiresAt: Date | null;
   emailVerificationLastSentAt: Date | null;
 
+  // Forgot / reset password
+  resetPasswordTokenHash: string | null;
+  resetPasswordExpiresAt: Date | null;
+  resetPasswordLastSentAt: Date | null;
+
   // Two-factor authentication (opt-in, user-enabled)
   twoFactorEnabled: boolean;
   twoFactorMethod: TwoFactorMethod | null;
@@ -49,6 +54,9 @@ export type UserCreationAttributes = Optional<
   | 'emailVerificationOtpHash'
   | 'emailVerificationOtpExpiresAt'
   | 'emailVerificationLastSentAt'
+  | 'resetPasswordTokenHash'
+  | 'resetPasswordExpiresAt'
+  | 'resetPasswordLastSentAt'
   | 'twoFactorEnabled'
   | 'twoFactorMethod'
   | 'twoFactorSecretEncrypted'
@@ -73,6 +81,10 @@ export class User extends Model<UserAttributes, UserCreationAttributes> implemen
   public emailVerificationOtpHash!: string | null;
   public emailVerificationOtpExpiresAt!: Date | null;
   public emailVerificationLastSentAt!: Date | null;
+
+  public resetPasswordTokenHash!: string | null;
+  public resetPasswordExpiresAt!: Date | null;
+  public resetPasswordLastSentAt!: Date | null;
 
   public twoFactorEnabled!: boolean;
   public twoFactorMethod!: TwoFactorMethod | null;
@@ -160,6 +172,10 @@ User.init(
     emailVerificationOtpHash: { type: DataTypes.STRING, allowNull: true },
     emailVerificationOtpExpiresAt: { type: DataTypes.DATE, allowNull: true },
     emailVerificationLastSentAt: { type: DataTypes.DATE, allowNull: true },
+
+    resetPasswordTokenHash: { type: DataTypes.STRING, allowNull: true },
+    resetPasswordExpiresAt: { type: DataTypes.DATE, allowNull: true },
+    resetPasswordLastSentAt: { type: DataTypes.DATE, allowNull: true },
 
     twoFactorEnabled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     twoFactorMethod: { type: DataTypes.ENUM('email', 'totp'), allowNull: true },

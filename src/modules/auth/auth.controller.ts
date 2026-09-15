@@ -88,6 +88,18 @@ export const resendLogin2faHandler = asyncHandler(async (req: Request, res: Resp
   res.status(200).json({ success: true, data: result });
 });
 
+export const forgotPasswordHandler = asyncHandler(async (req: Request, res: Response) => {
+  const { email } = req.body;
+  const result = await authService.forgotPassword(email);
+  res.status(200).json({ success: true, data: result });
+});
+
+export const resetPasswordHandler = asyncHandler(async (req: Request, res: Response) => {
+  const { token, password } = req.body;
+  const result = await authService.resetPassword(token, password);
+  res.status(200).json({ success: true, data: result });
+});
+
 export const refreshHandler = asyncHandler(async (req: Request, res: Response) => {
   const token = req.cookies?.[COOKIE_NAMES.refreshToken] || req.body.refreshToken;
   if (!token) throw ApiError.unauthorized('No refresh token provided');

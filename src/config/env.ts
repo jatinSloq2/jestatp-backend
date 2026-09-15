@@ -48,6 +48,14 @@ export const env = {
     resendCooldownSeconds: Number(process.env.OTP_RESEND_COOLDOWN_SEC) || 60,
   },
 
+  // Base URL of the frontend app — used to build links we email out (password reset, etc).
+  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+
+  passwordReset: {
+    expiryMinutes: Number(process.env.PASSWORD_RESET_EXPIRY_MIN) || 30,
+    resendCooldownSeconds: Number(process.env.PASSWORD_RESET_RESEND_COOLDOWN_SEC) || 60,
+  },
+
   mail: {
     host: process.env.SMTP_HOST || '',
     port: Number(process.env.SMTP_PORT) || 587,

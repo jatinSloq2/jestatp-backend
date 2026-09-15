@@ -54,3 +54,12 @@ export const emailTwoFaEnableSchema = Joi.object({
 export const disable2faSchema = Joi.object({
   password: Joi.string().optional(), // required only for local accounts; enforced in the service
 });
+
+export const forgotPasswordSchema = Joi.object({
+  email: Joi.string().email().required(),
+});
+
+export const resetPasswordSchema = Joi.object({
+  token: Joi.string().required(),
+  password: Joi.string().min(8).max(128).required(),
+});

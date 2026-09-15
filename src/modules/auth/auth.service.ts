@@ -3,9 +3,10 @@ import { sequelize, User, AuditLog } from '../../models';
 import { ApiError } from '../../utils/ApiError';
 import { signAccessToken, verifyTwoFactorToken, signTwoFactorToken, JwtPayload } from '../../utils/jwt';
 import { generateOtp, hashOtp, compareOtp, otpExpiryDate, isExpired, isInCooldown } from '../../utils/otp';
-import { sendMail, otpEmailTemplate } from '../../utils/mailer';
-import { encrypt, decrypt } from '../../utils/crypto';
+import { sendMail, otpEmailTemplate, passwordResetEmailTemplate } from '../../utils/mailer';
+import { encrypt, decrypt, hashToken } from '../../utils/crypto';
 import { generateTotpSecret, verifyTotpToken, buildTotpKeyUri, generateTotpQrCodeDataUrl } from '../../utils/totp';
+import crypto from 'crypto';
 import { env } from '../../config/env';
 import {
   issueAndPersistRefreshToken,
@@ -242,6 +243,68 @@ export async function resendLogin2faOtp(twoFactorToken: string) {
   await sendMail({ to: user.email, subject, html, text });
 
   return { message: 'A new code has been sent to your email' };
+}
+
+// ─────────────────────────── Forgot / reset password ───────────────────────────
+
+/**
+ * Issues a one-time password-reset link, emailed to the account if it exists.
+ * Always responds with the same message regardless of whether the account
+ * exists (avoids leaking which emails are registered). Google-only accounts
+ * (no passwordHash) have nothing to reset, so no email is sent for them either.
+ */
+export async function forgotPassword(email: string) {
+  const genericResult = { message: 'If an account exists for this email, a reset link has been sent.' };
+
+  const user = await User.findOne({ where: { email: email.toLowerCase() } });
+  if (!user || user.authProvider !== 'local') {
+    return genericResult;
+  }
+  if (isInCooldown(user.resetPasswordLastSentAt, env.passwordReset.resendCooldownSeconds)) {
+    return genericResult;
+  }
+
+  // The raw token goes in the emailed link; only its hash is ever persisted,
+  // mirroring how refresh tokens are stored (see utils/crypto.hashToken).
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  user.resetPasswordTokenHash = hashToken(rawToken);
+  user.resetPasswordExpiresAt = new Date(Date.now() + env.passwordReset.expiryMinutes * 60 * 1000);
+  user.resetPasswordLastSentAt = new Date();
+  await user.save();
+
+  const resetUrl = `${env.frontendUrl}/reset-password?token=${rawToken}&email=${encodeURIComponent(user.email)}`;
+  const { subject, html, text } = passwordResetEmailTemplate(resetUrl, env.passwordReset.expiryMinutes);
+  await sendMail({ to: user.email, subject, html, text });
+
+  await AuditLog.create({ userId: user.id, action: 'auth.password_reset_requested' });
+
+  return genericResult;
+}
+
+/** Consumes a password-reset token (from the emailed link) and sets a new password. */
+export async function resetPassword(token: string, newPassword: string) {
+  const tokenHash = hashToken(token);
+  const user = await User.findOne({ where: { resetPasswordTokenHash: tokenHash } });
+
+  if (!user || isExpired(user.resetPasswordExpiresAt)) {
+    throw ApiError.badRequest('This reset link is invalid or has expired. Please request a new one.');
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+
+  await sequelize.transaction(async (t) => {
+    user.passwordHash = passwordHash;
+    user.resetPasswordTokenHash = null;
+    user.resetPasswordExpiresAt = null;
+    await user.save({ transaction: t });
+    await AuditLog.create({ userId: user.id, action: 'auth.password_reset_completed' }, { transaction: t });
+  });
+
+  // A reset password is a strong signal to kill every other session — if
+  // someone else had access to the account, this cuts them off immediately.
+  await revokeAllForUser(user.id);
+
+  return { message: 'Your password has been reset. Please log in with your new password.' };
 }
 
 // ─────────────────────────── Refresh / Logout / Sessions ───────────────────────────
