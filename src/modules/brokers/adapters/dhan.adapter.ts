@@ -100,7 +100,11 @@ export class DhanAdapter extends BaseHttpAdapter implements BrokerAdapter {
       productType: p.productType,
       quantity: Number(p.netQty ?? 0),
       averagePrice: Number(p.costPrice ?? 0),
-      lastTradedPrice: Number(p.lastTradedPrice ?? 0),
+      // Dhan's /v2/positions response has no LTP field at all — it's
+      // intentionally left out (Dhan's own guidance is to source LTP from
+      // the marketfeed/websocket APIs instead), so there's nothing to read
+      // here rather than a wrong field name.
+      lastTradedPrice: undefined,
       realizedPnl: Number(p.realizedProfit ?? 0),
       unrealizedPnl: Number(p.unrealizedProfit ?? 0),
       raw: p,
@@ -155,6 +159,10 @@ export class DhanAdapter extends BaseHttpAdapter implements BrokerAdapter {
         price: order.price,
         triggerPrice: order.triggerPrice,
         orderType: order.orderType,
+        // Dhan's modify-order request always echoes a validity, same as
+        // the original place-order call — every documented example
+        // includes it and omitting it was untested against the live API.
+        validity: 'DAY',
       },
     });
     return { brokerOrderId: orderId, status: data.orderStatus, raw: data };

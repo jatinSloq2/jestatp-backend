@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { env } from '../../../config/env';
+import { ApiError } from '../../../utils/ApiError';
 import { BaseHttpAdapter } from './baseHttp.adapter';
 import { resolveZerodhaInstrumentToken } from './instrumentResolver';
 import {
@@ -73,6 +74,47 @@ export class ZerodhaAdapter extends BaseHttpAdapter implements BrokerAdapter {
     };
   }
 
+  /**
+   * Kite's session/order-mutation endpoints expect a form-encoded body, so
+   * these bypass the shared JSON `request()` helper and call fetch
+   * directly — but they still need the same error handling `request()`
+   * gives every other call. Without it, a rejected order (bad margin, RMS
+   * block, etc.) came back as `res.ok === false` yet was silently reported
+   * to the caller as a successful placement/modification, since nothing
+   * ever checked `res.ok` or looked at Kite's `{status:"error", message}`
+   * error shape.
+   */
+  private async requestForm<T = unknown>(
+    path: string,
+    method: 'POST' | 'PUT',
+    body: URLSearchParams,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<T> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...extraHeaders },
+      body: body.toString(),
+    });
+    const text = await res.text();
+    let json: unknown;
+    try {
+      json = text ? JSON.parse(text) : undefined;
+    } catch {
+      json = text;
+    }
+    if (!res.ok) {
+      // Docs: https://kite.trade/docs/connect/v3/exceptions/ — error bodies
+      // are shaped { status: "error", message, error_type }.
+      const upstreamMessage = (json as any)?.message ?? (typeof json === 'string' ? json : undefined);
+      throw new ApiError(
+        res.status >= 500 ? 502 : 400,
+        upstreamMessage ? `Broker API error (${res.status}): ${upstreamMessage}` : `Broker API error (${res.status}): ${res.statusText}`,
+        json,
+      );
+    }
+    return json as T;
+  }
+
   async connect(credentials: BrokerCredentials) {
     const requestToken = String(credentials.requestToken || '');
     const checksum = crypto
@@ -80,18 +122,12 @@ export class ZerodhaAdapter extends BaseHttpAdapter implements BrokerAdapter {
       .update(this.apiKey + requestToken + this.apiSecret)
       .digest('hex');
 
-    // Kite's token endpoint expects a form-encoded body, so we bypass the
-    // shared JSON `request()` helper and call fetch directly here.
-    const res = await fetch(`${this.baseUrl}/session/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Kite-Version': '3' },
-      body: new URLSearchParams({
-        api_key: this.apiKey,
-        request_token: requestToken,
-        checksum,
-      }).toString(),
-    });
-    const data = (await res.json()) as any;
+    const data = await this.requestForm<any>(
+      '/session/token',
+      'POST',
+      new URLSearchParams({ api_key: this.apiKey, request_token: requestToken, checksum }),
+      { 'X-Kite-Version': '3' },
+    );
 
     this.accessToken = data.data?.access_token || data.access_token;
     const profile: BrokerProfile = {
@@ -155,12 +191,7 @@ export class ZerodhaAdapter extends BaseHttpAdapter implements BrokerAdapter {
       ...(order.triggerPrice ? { trigger_price: String(order.triggerPrice) } : {}),
       validity: 'DAY',
     });
-    const res = await fetch(`${this.baseUrl}/orders/regular`, {
-      method: 'POST',
-      headers: { ...this.authHeaders(), 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    });
-    const data = (await res.json()) as any;
+    const data = await this.requestForm<any>('/orders/regular', 'POST', body, this.authHeaders());
     return { brokerOrderId: data.data?.order_id, status: 'SUBMITTED', raw: data };
   }
 
@@ -171,12 +202,7 @@ export class ZerodhaAdapter extends BaseHttpAdapter implements BrokerAdapter {
       ...(order.triggerPrice ? { trigger_price: String(order.triggerPrice) } : {}),
       ...(order.orderType ? { order_type: order.orderType } : {}),
     });
-    const res = await fetch(`${this.baseUrl}/orders/regular/${orderId}`, {
-      method: 'PUT',
-      headers: { ...this.authHeaders(), 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    });
-    const data = (await res.json()) as any;
+    const data = await this.requestForm<any>(`/orders/regular/${orderId}`, 'PUT', body, this.authHeaders());
     return { brokerOrderId: orderId, status: 'MODIFIED', raw: data };
   }
 
@@ -200,12 +226,17 @@ export class ZerodhaAdapter extends BaseHttpAdapter implements BrokerAdapter {
     };
   }
 
-  async getQuote(symbol: string): Promise<Quote> {
+  async getQuote(symbol: string, exchange = 'NSE'): Promise<Quote> {
+    // Kite's LTP endpoint keys its response by the exact `exchange:tradingsymbol`
+    // string passed in `i` — passing the bare trading symbol (no exchange
+    // prefix) means the requested key never matches anything in the
+    // response and this silently always returned 0.
+    const instrumentKey = `${exchange}:${symbol}`;
     const data = await this.request<any>('/quote/ltp', {
       headers: this.authHeaders(),
-      query: { i: symbol },
+      query: { i: instrumentKey },
     });
-    const q = Object.values(data.data ?? {})[0] as any;
+    const q = (data.data ?? {})[instrumentKey];
     return { tradingSymbol: symbol, ltp: Number(q?.last_price ?? 0), raw: data };
   }
 
