@@ -1,10 +1,13 @@
 import { env } from '../../../config/env';
 import { BaseHttpAdapter } from './baseHttp.adapter';
+import { DhanInstrument, resolveDhanSecurityId, toDhanExchangeSegment } from './instrumentResolver';
 import {
   BrokerAdapter,
   BrokerCredentials,
   BrokerProfile,
+  Candle,
   Funds,
+  HistoricalDataParams,
   ModifyOrderRequest,
   Order,
   OrderRequest,
@@ -13,6 +16,18 @@ import {
   Position,
   Quote,
 } from './brokerAdapter.interface';
+
+const SCRIP_MASTER_URL = 'https://images.dhan.co/api-data/api-scrip-master.csv';
+
+/** Dhan's intraday endpoint only supports these minute granularities; anything else falls back to the nearest supported one. */
+const DHAN_INTRADAY_INTERVAL: Record<Exclude<HistoricalDataParams['timeframe'], '1d'>, string> = {
+  '1m': '1',
+  '3m': '5', // Dhan has no 3-minute bucket — 5-minute is the closest supported interval.
+  '5m': '5',
+  '15m': '15',
+  '30m': '25', // closest supported bucket to 30m
+  '1h': '60',
+};
 
 /**
  * Dhan uses a long-lived "access token" generated from the Dhan web console
@@ -54,9 +69,13 @@ export class DhanAdapter extends BaseHttpAdapter implements BrokerAdapter {
 
   async getProfile(): Promise<BrokerProfile> {
     const data = await this.request<any>('/v2/profile', { headers: this.authHeaders() });
+    // Dhan's /v2/profile response has no separate display-name field — just
+    // dhanClientId, tokenValidity, activeSegment, etc — so the client id
+    // doubles as the name here (previously this was a no-op ternary that
+    // always evaluated to the same thing).
     return {
       clientId: data.dhanClientId || this.clientId,
-      name: data.tokenValidity ? data.dhanClientId : data.dhanClientId,
+      name: data.dhanClientId || this.clientId,
       broker: this.brokerName,
     };
   }
@@ -93,17 +112,28 @@ export class DhanAdapter extends BaseHttpAdapter implements BrokerAdapter {
     return (data || []).map(mapDhanOrder);
   }
 
+  private async resolveInstrument(exchange: string, tradingSymbol: string): Promise<DhanInstrument> {
+    return resolveDhanSecurityId(exchange, tradingSymbol, undefined, () =>
+      this.requestText(SCRIP_MASTER_URL),
+    );
+  }
+
   async placeOrder(order: OrderRequest): Promise<OrderResponse> {
+    // Dhan's order API identifies the instrument by `securityId` + the
+    // segment-qualified `exchangeSegment` enum (e.g. "NSE_EQ"), not by
+    // trading symbol / plain exchange — this previously sent `tradingSymbol`
+    // and the raw `exchange` string, which Dhan's API silently rejects.
+    const instrument = await this.resolveInstrument(order.exchange, order.tradingSymbol);
     const payload = {
       dhanClientId: this.clientId,
       transactionType: order.side,
-      exchangeSegment: order.exchange,
+      exchangeSegment: instrument.exchangeSegment,
       productType: order.productType,
       orderType: order.orderType,
       quantity: order.quantity,
       price: order.price ?? 0,
       triggerPrice: order.triggerPrice ?? 0,
-      tradingSymbol: order.tradingSymbol,
+      securityId: instrument.securityId,
       validity: 'DAY',
     };
     const data = await this.request<any>('/v2/orders', {
@@ -149,13 +179,75 @@ export class DhanAdapter extends BaseHttpAdapter implements BrokerAdapter {
     };
   }
 
-  async getQuote(symbol: string): Promise<Quote> {
+  async getQuote(symbol: string, exchange = 'NSE'): Promise<Quote> {
+    // The marketfeed LTP API keys its response by numeric securityId, not
+    // trading symbol — this previously sent the trading symbol as both the
+    // request and lookup key, which never matches Dhan's response shape.
+    const instrument = await this.resolveInstrument(exchange, symbol);
     const data = await this.request<any>('/v2/marketfeed/ltp', {
       method: 'POST',
       headers: this.authHeaders(),
-      body: { NSE_EQ: [symbol] },
+      body: { [instrument.exchangeSegment]: [Number(instrument.securityId)] },
     });
-    return { tradingSymbol: symbol, ltp: Number(data?.data?.NSE_EQ?.[symbol]?.last_price ?? 0), raw: data };
+    const ltp = data?.data?.[instrument.exchangeSegment]?.[instrument.securityId]?.last_price;
+    return { tradingSymbol: symbol, ltp: Number(ltp ?? 0), raw: data };
+  }
+
+  async getHistoricalData(params: HistoricalDataParams): Promise<Candle[]> {
+    const instrument = await resolveDhanSecurityId(params.exchange, params.tradingSymbol, params.segment, () =>
+      this.requestText(SCRIP_MASTER_URL),
+    );
+    const instrumentType = params.segment === 'fno' ? 'FUTSTK' : 'EQUITY';
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const toDateStr = (d: Date) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+    const toDateTimeStr = (d: Date) =>
+      `${toDateStr(d)} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+
+    let data: any;
+    if (params.timeframe === '1d') {
+      data = await this.request<any>('/v2/charts/historical', {
+        method: 'POST',
+        headers: this.authHeaders(),
+        body: {
+          securityId: instrument.securityId,
+          exchangeSegment: instrument.exchangeSegment,
+          instrument: instrumentType,
+          expiryCode: 0,
+          oi: false,
+          fromDate: toDateStr(params.from),
+          toDate: toDateStr(params.to),
+        },
+      });
+    } else {
+      data = await this.request<any>('/v2/charts/intraday', {
+        method: 'POST',
+        headers: this.authHeaders(),
+        body: {
+          securityId: instrument.securityId,
+          exchangeSegment: instrument.exchangeSegment,
+          instrument: instrumentType,
+          interval: DHAN_INTRADAY_INTERVAL[params.timeframe],
+          oi: false,
+          fromDate: toDateTimeStr(params.from),
+          toDate: toDateTimeStr(params.to),
+        },
+      });
+    }
+
+    // Response is parallel arrays: { open: [], high: [], low: [], close: [], volume: [], timestamp: [] }.
+    const { open = [], high = [], low = [], close = [], volume = [], timestamp = [] } = data ?? {};
+    const candles: Candle[] = [];
+    for (let i = 0; i < timestamp.length; i++) {
+      candles.push({
+        timestamp: Number(timestamp[i]) * 1000, // Dhan returns epoch seconds
+        open: Number(open[i]),
+        high: Number(high[i]),
+        low: Number(low[i]),
+        close: Number(close[i]),
+        volume: Number(volume[i] ?? 0),
+      });
+    }
+    return candles;
   }
 }
 

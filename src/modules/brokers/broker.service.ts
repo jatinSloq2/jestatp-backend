@@ -2,8 +2,9 @@ import { sequelize, BrokerConnection, AuditLog } from '../../models';
 import { BrokerName } from '../../models/brokerConnection.model';
 import { ApiError } from '../../utils/ApiError';
 import { encrypt } from '../../utils/crypto';
-import { buildAdapterForConnect } from './adapters/brokerAdapter.factory';
+import { buildAdapterForConnect, buildBrokerAdapter } from './adapters/brokerAdapter.factory';
 import { ZerodhaAdapter } from './adapters/zerodha.adapter';
+import { Candle, HistoricalDataParams } from './adapters/brokerAdapter.interface';
 
 export const SUPPORTED_BROKERS: { broker: BrokerName; name: string; authType: 'token' | 'oauth' }[] = [
   { broker: 'dhan', name: 'Dhan', authType: 'token' },
@@ -108,4 +109,19 @@ export async function getActiveConnection(userId: string, broker: BrokerName) {
     throw ApiError.badRequest(`No active ${broker} connection. Please connect your ${broker} account first.`);
   }
   return connection;
+}
+
+/**
+ * Fetches real OHLCV candles from the given broker for the given instrument —
+ * the single entry point the chart preview and the backtest engine both use,
+ * so there is exactly one code path that talks to a broker for historical data.
+ */
+export async function getHistoricalCandles(
+  userId: string,
+  broker: BrokerName,
+  params: HistoricalDataParams,
+): Promise<Candle[]> {
+  const connection = await getActiveConnection(userId, broker);
+  const adapter = buildBrokerAdapter(connection);
+  return adapter.getHistoricalData(params);
 }

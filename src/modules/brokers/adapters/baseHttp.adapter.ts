@@ -63,4 +63,16 @@ export abstract class BaseHttpAdapter {
 
     return json as T;
   }
+
+  /** Like `request`, but for endpoints that return raw text/CSV (e.g. instrument master dumps) instead of JSON. */
+  protected async requestText(url: string, options: HttpRequestOptions = {}): Promise<string> {
+    const response = await fetch(url, {
+      method: options.method || 'GET',
+      headers: { Accept: 'text/csv, text/plain, */*', ...options.headers },
+    });
+    if (!response.ok) {
+      throw new ApiError(response.status >= 500 ? 502 : 400, `Failed to fetch ${url}: HTTP ${response.status}`);
+    }
+    return response.text();
+  }
 }

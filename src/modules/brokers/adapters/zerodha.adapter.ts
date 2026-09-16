@@ -1,11 +1,14 @@
 import crypto from 'crypto';
 import { env } from '../../../config/env';
 import { BaseHttpAdapter } from './baseHttp.adapter';
+import { resolveZerodhaInstrumentToken } from './instrumentResolver';
 import {
   BrokerAdapter,
   BrokerCredentials,
   BrokerProfile,
+  Candle,
   Funds,
+  HistoricalDataParams,
   ModifyOrderRequest,
   Order,
   OrderRequest,
@@ -14,6 +17,28 @@ import {
   Position,
   Quote,
 } from './brokerAdapter.interface';
+
+/** Our platform-wide timeframe -> Kite Connect's `/instruments/historical/:token/:interval` interval name. */
+const ZERODHA_INTERVAL_MAP: Record<HistoricalDataParams['timeframe'], string> = {
+  '1m': 'minute',
+  '3m': '3minute',
+  '5m': '5minute',
+  '15m': '15minute',
+  '30m': '30minute',
+  '1h': '60minute',
+  '1d': 'day',
+};
+
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+function formatKiteDate(d: Date): string {
+  // Kite's historical API expects "yyyy-mm-dd hh:mm:ss" in IST wall-clock
+  // time, not UTC — shift the instant by the IST offset, then read it back
+  // out with the UTC getters so no local-timezone assumptions leak in.
+  const ist = new Date(d.getTime() + IST_OFFSET_MS);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${ist.getUTCFullYear()}-${pad(ist.getUTCMonth() + 1)}-${pad(ist.getUTCDate())} ${pad(ist.getUTCHours())}:${pad(ist.getUTCMinutes())}:${pad(ist.getUTCSeconds())}`;
+}
 
 /**
  * Zerodha Kite Connect uses a redirect-based login flow:
@@ -182,6 +207,34 @@ export class ZerodhaAdapter extends BaseHttpAdapter implements BrokerAdapter {
     });
     const q = Object.values(data.data ?? {})[0] as any;
     return { tradingSymbol: symbol, ltp: Number(q?.last_price ?? 0), raw: data };
+  }
+
+  async getHistoricalData(params: HistoricalDataParams): Promise<Candle[]> {
+    const instrumentToken = await resolveZerodhaInstrumentToken(
+      params.exchange,
+      params.tradingSymbol,
+      (exchange) => this.requestText(`${this.baseUrl}/instruments/${exchange}`, { headers: this.authHeaders() }),
+    );
+    const interval = ZERODHA_INTERVAL_MAP[params.timeframe];
+
+    const data = await this.request<any>(`/instruments/historical/${instrumentToken}/${interval}`, {
+      headers: this.authHeaders(),
+      query: {
+        from: formatKiteDate(params.from),
+        to: formatKiteDate(params.to),
+      },
+    });
+
+    const candles = (data.data?.candles ?? []) as any[][];
+    // Each record is [timestamp, open, high, low, close, volume, (oi)] with an ISO-with-offset timestamp string.
+    return candles.map((c) => ({
+      timestamp: new Date(c[0]).getTime(),
+      open: Number(c[1]),
+      high: Number(c[2]),
+      low: Number(c[3]),
+      close: Number(c[4]),
+      volume: Number(c[5] ?? 0),
+    }));
   }
 }
 

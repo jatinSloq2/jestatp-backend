@@ -110,6 +110,28 @@ export interface Quote {
   raw?: unknown;
 }
 
+/** One OHLCV candle. `timestamp` is epoch milliseconds (UTC). */
+export interface Candle {
+  timestamp: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export type HistoricalTimeframe = '1m' | '3m' | '5m' | '15m' | '30m' | '1h' | '1d';
+
+export interface HistoricalDataParams {
+  tradingSymbol: string;
+  exchange: string;
+  segment?: 'equity' | 'fno' | 'currency' | 'commodity';
+  timeframe: HistoricalTimeframe;
+  /** Inclusive range, both in UTC. */
+  from: Date;
+  to: Date;
+}
+
 export interface BrokerAdapter {
   readonly brokerName: string;
 
@@ -127,4 +149,7 @@ export interface BrokerAdapter {
   getOrderStatus(orderId: string): Promise<OrderStatus>;
 
   getQuote(symbol: string): Promise<Quote>;
+
+  /** Historical OHLCV candles — the data source for chart previews and backtesting. */
+  getHistoricalData(params: HistoricalDataParams): Promise<Candle[]>;
 }

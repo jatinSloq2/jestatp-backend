@@ -5,7 +5,9 @@ import {
   BrokerAdapter,
   BrokerCredentials,
   BrokerProfile,
+  Candle,
   Funds,
+  HistoricalDataParams,
   ModifyOrderRequest,
   Order,
   OrderRequest,
@@ -14,6 +16,33 @@ import {
   Position,
   Quote,
 } from './brokerAdapter.interface';
+
+/**
+ * Our platform-wide timeframe -> Groww's `candle_interval` query value.
+ * Groww's non-deprecated historical endpoint (GET /v1/historical/candles)
+ * documents this as e.g. "5minute"; there's no native 3m/30m bucket, so
+ * those fall back to the closest supported one.
+ */
+const GROWW_INTERVAL_MAP: Record<HistoricalDataParams['timeframe'], string> = {
+  '1m': '1minute',
+  '3m': '5minute',
+  '5m': '5minute',
+  '15m': '15minute',
+  '30m': '30minute',
+  '1h': '60minute',
+  '1d': '1day',
+};
+
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+function formatGrowwDateTime(d: Date): string {
+  // Groww's docs show start_time/end_time as plain "yyyy-MM-dd HH:mm:ss"
+  // with no offset — that's exchange (IST) wall-clock time, same convention
+  // as every other NSE/BSE broker API, so shift from UTC before formatting.
+  const ist = new Date(d.getTime() + IST_OFFSET_MS);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${ist.getUTCFullYear()}-${pad(ist.getUTCMonth() + 1)}-${pad(ist.getUTCDate())} ${pad(ist.getUTCHours())}:${pad(ist.getUTCMinutes())}:${pad(ist.getUTCSeconds())}`;
+}
 
 /**
  * Groww's official trading API issues an access token from an API key +
@@ -173,6 +202,31 @@ export class GrowwAdapter extends BaseHttpAdapter implements BrokerAdapter {
     });
     const p = data.payload ?? data;
     return { tradingSymbol: symbol, ltp: Number(p.last_price ?? 0), raw: data };
+  }
+
+  async getHistoricalData(params: HistoricalDataParams): Promise<Candle[]> {
+    const growwSymbol = `${params.exchange.toUpperCase()}-${params.tradingSymbol.toUpperCase()}`;
+    const data = await this.request<any>('/v1/historical/candles', {
+      headers: this.authHeaders(),
+      query: {
+        exchange: params.exchange.toUpperCase(),
+        segment: params.segment === 'fno' ? 'FNO' : 'CASH',
+        groww_symbol: growwSymbol,
+        start_time: formatGrowwDateTime(params.from),
+        end_time: formatGrowwDateTime(params.to),
+        candle_interval: GROWW_INTERVAL_MAP[params.timeframe],
+      },
+    });
+    const candles = (data.payload?.candles ?? data.candles ?? []) as number[][];
+    // Each record is [timestamp (epoch seconds), open, high, low, close, volume].
+    return candles.map((c) => ({
+      timestamp: Number(c[0]) * 1000,
+      open: Number(c[1]),
+      high: Number(c[2]),
+      low: Number(c[3]),
+      close: Number(c[4]),
+      volume: Number(c[5] ?? 0),
+    }));
   }
 }
 

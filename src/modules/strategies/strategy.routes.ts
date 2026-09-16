@@ -17,6 +17,8 @@ import {
   updateStrategyHandler,
   validateStrategyHandler,
 } from './strategy.controller';
+import { backtestPreviewSchema, backtestRequestSchema } from './backtest/backtest.validator';
+import { previewBacktestHandler, runBacktestHandler } from './backtest/backtest.controller';
 
 const router = Router();
 router.use(requireAuth);
@@ -186,6 +188,24 @@ router.get('/meta/indicators', getIndicatorCatalogHandler);
  *       422: { description: Invalid — see issues array }
  */
 router.post('/validate', validate(strategyValidateSchema), validateStrategyHandler);
+
+/**
+ * @openapi
+ * /strategies/backtest/preview:
+ *   post:
+ *     tags: [Strategies]
+ *     summary: Run a backtest for a strategy definition that hasn't been saved yet
+ *     description: >
+ *       Same engine as POST /strategies/{id}/backtest, but takes the full strategy
+ *       definition inline instead of an id — used by the strategy builder to show a real
+ *       backtest against real historical candles while the user is still editing, before
+ *       anything is persisted.
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Backtest result (candles, trades, equity curve, stats) }
+ *       400: { description: No active broker connection, or not enough historical data }
+ */
+router.post('/backtest/preview', validate(backtestPreviewSchema), previewBacktestHandler);
 
 /**
  * @openapi
@@ -431,5 +451,40 @@ router.get('/:id/versions', validate(idParamSchema, 'params'), listVersionsHandl
  *       404: { description: Version not found }
  */
 router.get('/:id/versions/:version', validate(versionParamSchema, 'params'), getVersionHandler);
+
+/**
+ * @openapi
+ * /strategies/{id}/backtest:
+ *   post:
+ *     tags: [Strategies]
+ *     summary: Run this strategy's entry/exit conditions against real historical candles
+ *     description: >
+ *       Fetches OHLCV candles for the strategy's own instrument/exchange/timeframe from the
+ *       given connected broker (defaulting to the last 30 days for intraday timeframes, or
+ *       the last year for daily), replays the strategy's actual DSL conditions bar-by-bar,
+ *       and returns the resulting trades, equity curve, and summary stats. This is real
+ *       simulated execution against real market data — not a random/illustrative preview.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [broker]
+ *             properties:
+ *               broker: { type: string, enum: [dhan, zerodha, groww] }
+ *               from: { type: string, format: date-time }
+ *               to: { type: string, format: date-time }
+ *     responses:
+ *       200: { description: Backtest result (candles, trades, equity curve, stats) }
+ *       400: { description: No active broker connection, or not enough historical data }
+ */
+router.post('/:id/backtest', validate(idParamSchema, 'params'), validate(backtestRequestSchema), runBacktestHandler);
 
 export default router;
