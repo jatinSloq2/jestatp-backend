@@ -9,6 +9,7 @@ import {
   Candle,
   Funds,
   HistoricalDataParams,
+  Holding,
   ModifyOrderRequest,
   Order,
   OrderRequest,
@@ -202,6 +203,27 @@ export class GrowwAdapter extends BaseHttpAdapter implements BrokerAdapter {
   async getOrders(): Promise<Order[]> {
     const data = await this.request<any>('/v1/order/list', { headers: this.authHeaders() });
     return (data.payload?.order_list ?? []).map(mapGrowwOrder);
+  }
+
+  /**
+   * Docs: GET /v1/holdings/user — response schema has no `exchange` field at
+   * all (unlike /v1/positions/user, which does), so there's nothing to read
+   * a real exchange from; Groww equity holdings are NSE-primary listed in
+   * practice, so this defaults to 'NSE'. There's also no LTP field here —
+   * callers should source live price from the feed service instead.
+   */
+  async getHoldings(): Promise<Holding[]> {
+    const data = await this.request<any>('/v1/holdings/user', { headers: this.authHeaders() });
+    const holdings = data.payload?.holdings ?? [];
+    return holdings.map((h: any) => ({
+      tradingSymbol: h.trading_symbol,
+      isin: h.isin,
+      exchange: 'NSE',
+      quantity: Number(h.quantity ?? 0),
+      averagePrice: Number(h.average_price ?? 0),
+      lastTradedPrice: undefined,
+      raw: h,
+    }));
   }
 
   async placeOrder(order: OrderRequest): Promise<OrderResponse> {

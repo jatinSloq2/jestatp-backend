@@ -8,6 +8,7 @@ import {
   Candle,
   Funds,
   HistoricalDataParams,
+  Holding,
   ModifyOrderRequest,
   Order,
   OrderRequest,
@@ -114,6 +115,27 @@ export class DhanAdapter extends BaseHttpAdapter implements BrokerAdapter {
   async getOrders(): Promise<Order[]> {
     const data = await this.request<any[]>('/v2/orders', { headers: this.authHeaders() });
     return (data || []).map(mapDhanOrder);
+  }
+
+  /**
+   * Docs: GET /v2/holdings — the `exchange` field is literally the string
+   * "ALL" for every row (Dhan's holdings view isn't exchange-scoped), so
+   * there's no real per-symbol exchange to read; defaults to 'NSE' since
+   * that's where the overwhelming majority of demat equity holdings are
+   * listed. No LTP field either — same as /v2/positions, source live price
+   * from the feed service instead.
+   */
+  async getHoldings(): Promise<Holding[]> {
+    const data = await this.request<any[]>('/v2/holdings', { headers: this.authHeaders() });
+    return (data || []).map((h) => ({
+      tradingSymbol: h.tradingSymbol,
+      isin: h.isin,
+      exchange: 'NSE',
+      quantity: Number(h.totalQty ?? 0),
+      averagePrice: Number(h.avgCostPrice ?? 0),
+      lastTradedPrice: undefined,
+      raw: h,
+    }));
   }
 
   private async resolveInstrument(exchange: string, tradingSymbol: string): Promise<DhanInstrument> {

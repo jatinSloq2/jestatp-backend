@@ -10,6 +10,7 @@ import {
   Candle,
   Funds,
   HistoricalDataParams,
+  Holding,
   ModifyOrderRequest,
   Order,
   OrderRequest,
@@ -177,6 +178,26 @@ export class ZerodhaAdapter extends BaseHttpAdapter implements BrokerAdapter {
   async getOrders(): Promise<Order[]> {
     const data = await this.request<any>('/orders', { headers: this.authHeaders() });
     return (data.data ?? []).map(mapZerodhaOrder);
+  }
+
+  /**
+   * Docs: GET /portfolio/holdings — `quantity` alone under-reports what's
+   * actually held (it only reflects T+2-settled shares); Kite's own forum
+   * guidance is that `quantity + t1_quantity` is the correct total held
+   * amount for anything bought in the last day or two.
+   */
+  async getHoldings(): Promise<Holding[]> {
+    const data = await this.request<any>('/portfolio/holdings', { headers: this.authHeaders() });
+    const rows = data.data ?? [];
+    return rows.map((h: any) => ({
+      tradingSymbol: h.tradingsymbol,
+      isin: h.isin,
+      exchange: h.exchange,
+      quantity: Number(h.quantity ?? 0) + Number(h.t1_quantity ?? 0),
+      averagePrice: Number(h.average_price ?? 0),
+      lastTradedPrice: Number(h.last_price ?? 0),
+      raw: h,
+    }));
   }
 
   async placeOrder(order: OrderRequest): Promise<OrderResponse> {

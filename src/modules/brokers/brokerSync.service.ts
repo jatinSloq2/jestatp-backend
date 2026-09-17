@@ -1,4 +1,4 @@
-import { sequelize, Order, Position, Fund, BrokerConnection } from '../../models';
+import { sequelize, Order, Position, Fund, Holding, BrokerConnection } from '../../models';
 import { OrderSegment } from '../../models/order.model';
 import { PositionSegment } from '../../models/position.model';
 import { buildBrokerAdapter } from './adapters/brokerAdapter.factory';
@@ -111,9 +111,42 @@ export async function syncFunds(connection: BrokerConnection): Promise<void> {
   });
 }
 
+export async function syncHoldings(connection: BrokerConnection): Promise<number> {
+  const adapter = buildBrokerAdapter(connection);
+  const brokerHoldings = await adapter.getHoldings();
+
+  await sequelize.transaction(async (t) => {
+    for (const h of brokerHoldings) {
+      await Holding.upsert(
+        {
+          userId: connection.userId,
+          brokerConnectionId: connection.id,
+          broker: connection.broker,
+          exchange: h.exchange,
+          tradingSymbol: h.tradingSymbol,
+          isin: h.isin ?? null,
+          quantity: h.quantity,
+          averagePrice: h.averagePrice,
+          lastTradedPrice: h.lastTradedPrice ?? null,
+          raw: (h.raw as Record<string, unknown>) ?? null,
+          syncedAt: new Date(),
+        },
+        { transaction: t },
+      );
+    }
+  });
+
+  return brokerHoldings.length;
+}
+
 /** Runs all three syncs for one connection and stamps `lastSyncedAt`. Used by both the queue worker and the on-demand sync endpoint's fallback path. */
 export async function syncConnectionFully(connection: BrokerConnection): Promise<void> {
-  const results = await Promise.allSettled([syncOrders(connection), syncPositions(connection), syncFunds(connection)]);
+  const results = await Promise.allSettled([
+    syncOrders(connection),
+    syncPositions(connection),
+    syncFunds(connection),
+    syncHoldings(connection),
+  ]);
 
   const failures = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
   if (failures.length > 0) {

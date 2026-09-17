@@ -44,6 +44,18 @@ export interface Position {
   raw?: unknown;
 }
 
+/** A long-term equity delivery holding sitting in the user's DEMAT account — distinct from an intraday/carry-forward Position. */
+export interface Holding {
+  tradingSymbol: string;
+  isin?: string;
+  exchange: string;
+  quantity: number;
+  averagePrice: number;
+  /** Not every broker's holdings endpoint returns a live price — undefined here means "source it from the live feed instead". */
+  lastTradedPrice?: number;
+  raw?: unknown;
+}
+
 export type OrderSide = 'BUY' | 'SELL';
 export type OrderType = 'MARKET' | 'LIMIT' | 'SL' | 'SL-M';
 export type ProductType = 'CNC' | 'MIS' | 'NRML';
@@ -141,6 +153,7 @@ export interface BrokerAdapter {
   getProfile(): Promise<BrokerProfile>;
   getFunds(): Promise<Funds>;
   getPositions(): Promise<Position[]>;
+  getHoldings(): Promise<Holding[]>;
   getOrders(): Promise<Order[]>;
 
   placeOrder(order: OrderRequest): Promise<OrderResponse>;

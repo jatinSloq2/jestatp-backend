@@ -3,6 +3,7 @@ export { User } from './user.model';
 export { BrokerConnection } from './brokerConnection.model';
 export { Order } from './order.model';
 export { Position } from './position.model';
+export { Holding } from './holding.model';
 export { Fund } from './fund.model';
 export { AuditLog } from './auditLog.model';
 export { RefreshToken } from './refreshToken.model';
