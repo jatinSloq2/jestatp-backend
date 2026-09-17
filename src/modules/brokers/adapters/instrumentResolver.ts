@@ -134,3 +134,61 @@ export async function resolveDhanSecurityId(
   }
   return found;
 }
+
+// ─────────────────────────── Groww exchange tokens ───────────────────────────
+
+export interface GrowwInstrument {
+  exchangeToken: string;
+  growwSegment: 'CASH' | 'FNO';
+}
+
+let growwCache: CacheEntry<Map<string, GrowwInstrument>> | null = null;
+
+/** Maps our platform's `segment` (equity/fno/currency/commodity/index) to Groww's feed segment enum ('CASH' | 'FNO'). */
+export function toGrowwFeedSegment(segment?: string): 'CASH' | 'FNO' {
+  return segment === 'equity' || segment === 'index' ? 'CASH' : 'FNO';
+}
+
+/**
+ * Groww's full instrument master: https://growwapi-assets.groww.in/instruments/instrument.csv
+ * Columns: exchange, exchange_token, trading_symbol, groww_symbol, name,
+ * instrument_type, segment, series, isin, underlying_symbol,
+ * underlying_exchange_token, expiry_date, strike_price, lot_size, tick_size,
+ * freeze_quantity, is_reserved, buy_allowed, sell_allowed.
+ *
+ * Unlike Groww's REST endpoints (which take a `groww_symbol` string
+ * directly), the *feed/websocket* API needs the numeric `exchange_token`
+ * from this CSV — see GrowwFeed.subscribe_ltp in the feed service.
+ */
+export async function resolveGrowwExchangeToken(
+  exchange: string,
+  tradingSymbol: string,
+  segment: string | undefined,
+  fetchCsv: () => Promise<string>,
+): Promise<GrowwInstrument> {
+  const targetSegment = toGrowwFeedSegment(segment);
+  const key = `${exchange.toUpperCase()}:${targetSegment}:${tradingSymbol.toUpperCase()}`;
+
+  if (!growwCache || Date.now() - growwCache.fetchedAt > CACHE_TTL_MS) {
+    const map = new Map<string, GrowwInstrument>();
+    const csv = await fetchCsv();
+    for (const row of parseCsv(csv)) {
+      const ex = row.exchange;
+      const token = row.exchange_token;
+      const symbol = row.trading_symbol;
+      const rowSegment = row.segment === 'FNO' ? 'FNO' : 'CASH';
+      if (!ex || !token || !symbol) continue;
+      map.set(`${ex.toUpperCase()}:${rowSegment}:${symbol.toUpperCase()}`, {
+        exchangeToken: token,
+        growwSegment: rowSegment,
+      });
+    }
+    growwCache = { fetchedAt: Date.now(), data: map };
+  }
+
+  const found = growwCache.data.get(key);
+  if (!found) {
+    throw ApiError.badRequest(`Could not resolve Groww exchange_token for ${exchange}:${tradingSymbol}`);
+  }
+  return found;
+}

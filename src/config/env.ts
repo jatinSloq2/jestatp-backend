@@ -112,4 +112,13 @@ export const env = {
   worker: {
     concurrency: Number(process.env.WORKER_CONCURRENCY) || 5,
   },
+
+  // The Python live-feed microservice (jestatp-feed-service) — websocket
+  // streaming for Groww/Zerodha/Dhan, used for options LTP during paper
+  // trading and any live-price UI. Internal docker-network address, never
+  // exposed publicly.
+  feedService: {
+    url: process.env.FEED_SERVICE_URL || 'http://localhost:8100',
+    internalToken: process.env.FEED_SERVICE_INTERNAL_TOKEN || 'change-me-in-env',
+  },
 };

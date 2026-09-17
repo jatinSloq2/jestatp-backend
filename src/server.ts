@@ -5,6 +5,7 @@ import { redisClient } from './config/redis';
 import { brokerSyncQueue } from './queues/brokerSync.queue';
 import { env } from './config/env';
 import { logger } from './utils/logger';
+import { createMarketDataWsServer } from './ws/marketDataWs.server';
 
 let server: Server | undefined;
 let shuttingDown = false;
@@ -19,6 +20,9 @@ async function bootstrap() {
       logger.info(`📖 Swagger docs: http://localhost:${env.port}/api-docs`);
       logger.info(`🩺 Health check: http://localhost:${env.port}/health`);
     });
+
+    createMarketDataWsServer(server);
+    logger.info(`📡 Live market data WS listening at ws://localhost:${env.port}/ws/market-data`);
   } catch (err) {
     logger.error(`Failed to start server: ${(err as Error).message}`);
     process.exit(1);
