@@ -65,12 +65,11 @@ async function resolveInstruments(
   requested: FeedInstrumentRequest[],
 ): Promise<FeedInstrument[]> {
   const creds = buildFeedCredentials(connection);
-  const tokenCreds = connection.broker === 'zerodha' ? { zerodha: { apiKey: creds.apiKey, accessToken: creds.accessToken } } : {};
 
   return Promise.all(
     requested.map(async (instr) => ({
       ...instr,
-      token: await resolveFeedToken(connection.broker, instr.exchange, instr.tradingSymbol, instr.segment, tokenCreds),
+      token: await resolveFeedToken(connection.broker, instr.exchange, instr.tradingSymbol, instr.segment, creds),
     })),
   );
 }
@@ -116,7 +115,7 @@ export async function subscribeFeed(
   onTick: (tick: FeedTick) => void,
 ): Promise<() => Promise<void>> {
   if (instruments.length === 0) {
-    return async () => {};
+    return async () => { };
   }
 
   const resolved = await resolveInstruments(connection, instruments);

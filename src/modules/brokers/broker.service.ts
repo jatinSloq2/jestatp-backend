@@ -56,7 +56,7 @@ export async function connectDhan(userId: string, clientId: string, accessToken:
 }
 
 /** Zerodha step 1: build the official Kite login URL the frontend should redirect the user to. */
-export function getZerodhaLoginUrl(apiKey: string) {
+export function getZerodhaLoginUrl(apiKey: string): Promise<string> {
   return ZerodhaAdapter.buildLoginUrl(apiKey);
 }
 

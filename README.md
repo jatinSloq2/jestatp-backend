@@ -7,12 +7,12 @@ around the architecture described in the platform docs:
 
 This phase covers, per the "Development Phases" table in the docs:
 
-| Phase | What's in this backend |
-|---|---|
-| 1 | Core platform + authentication (JWT + Google OAuth, **email verification + opt-in 2FA**) |
-| 2 | Broker connection layer (Dhan, Zerodha, Groww) |
-| 3–5 | Dhan / Zerodha / Groww integrations |
-| — | Live **Orders**, **Positions**, **Funds/Balance** sync, split by segment (equity delivery vs F&O) |
+| Phase | What's in this backend                                                                            |
+| ----- | ------------------------------------------------------------------------------------------------- |
+| 1     | Core platform + authentication (JWT + Google OAuth, **email verification + opt-in 2FA**)          |
+| 2     | Broker connection layer (Dhan, Zerodha, Groww)                                                    |
+| 3–5   | Dhan / Zerodha / Groww integrations                                                               |
+| —     | Live **Orders**, **Positions**, **Funds/Balance** sync, split by segment (equity delivery vs F&O) |
 
 Strategy builder, backtesting, paper trading, the risk engine, and the full OMS lifecycle
 are later phases — this repo intentionally stops at "connect a broker and see your real
@@ -85,7 +85,7 @@ dependent on Dhan/Zerodha/Groww"** — every broker call in this backend goes th
 
 ```ts
 interface BrokerAdapter {
-  connect(credentials): Promise<{ accessToken, profile }>;
+  connect(credentials): Promise<{ accessToken; profile }>;
   getProfile(): Promise<BrokerProfile>;
   getFunds(): Promise<Funds>;
   getPositions(): Promise<Position[]>;
@@ -102,6 +102,7 @@ interface BrokerAdapter {
 Upstox, or FYERS later is just one more file — nothing else in the app changes.
 
 **No broker passwords, PINs, or OTPs ever touch our servers:**
+
 - **Dhan** — user pastes the personal access token they generate on Dhan's own dashboard.
 - **Zerodha** — full Kite Connect OAuth redirect: we send the user to Zerodha's login page,
   they authenticate (including any 2FA) directly with Zerodha, and Zerodha redirects back
@@ -141,14 +142,17 @@ returns `202` but nothing will ever pick the job up.
 ## Running at scale
 
 ### Docker Compose (recommended for anything beyond local dev)
+
 ```bash
 docker compose up --build --scale api=3 --scale worker=5
 ```
+
 Brings up Postgres, Redis, runs migrations once, then starts 3 API replicas and 5 worker
 replicas. Put a load balancer in front of the `api` service. See
 [`CHANGELOG_SCALABILITY.md`](./CHANGELOG_SCALABILITY.md) for the full architecture.
 
 ### PM2 (a VM without containers)
+
 ```bash
 npm run build
 pm2 start ecosystem.config.js --env production
@@ -170,68 +174,73 @@ All routes are prefixed with `/api/v1` (see `API_PREFIX` in `.env`). Full reques
 schemas are in Swagger — this is just the map.
 
 ### Auth (`/auth`) — mandatory email verification, opt-in 2FA, cookie sessions
+
 Full detail in [`CHANGELOG_AUTH_V2.md`](./CHANGELOG_AUTH_V2.md). Summary:
 
-| Method & path | Description |
-|---|---|
-| `POST /auth/register` | Email + password signup — emails an OTP, no session yet |
-| `POST /auth/verify-email` | Confirm the signup OTP — logs the user in (sets cookies) |
-| `POST /auth/resend-verification` | Resend the signup OTP |
-| `POST /auth/login` | Returns `verified` / `requires_email_verification` / `requires_2fa` |
-| `POST /auth/login/2fa/verify` | Finish login with an email OTP or authenticator code |
-| `POST /auth/login/2fa/resend` | Resend the login email OTP (email 2FA method only) |
-| `POST /auth/refresh` | Rotate session using the httpOnly refresh cookie |
-| `POST /auth/logout` | Clears session cookies |
-| `GET /auth/me` | Current user (cookie or `Authorization: Bearer`) |
-| `GET /auth/google` / `GET /auth/google/callback` | Google login, 2FA-aware |
-| `GET /auth/2fa/status` | Current 2FA status |
-| `POST /auth/2fa/totp/setup` / `.../totp/enable` | Enable Google-Authenticator 2FA |
-| `POST /auth/2fa/email/setup` / `.../email/enable` | Enable email-OTP 2FA |
-| `POST /auth/2fa/disable` | Disable 2FA |
+| Method & path                                     | Description                                                         |
+| ------------------------------------------------- | ------------------------------------------------------------------- |
+| `POST /auth/register`                             | Email + password signup — emails an OTP, no session yet             |
+| `POST /auth/verify-email`                         | Confirm the signup OTP — logs the user in (sets cookies)            |
+| `POST /auth/resend-verification`                  | Resend the signup OTP                                               |
+| `POST /auth/login`                                | Returns `verified` / `requires_email_verification` / `requires_2fa` |
+| `POST /auth/login/2fa/verify`                     | Finish login with an email OTP or authenticator code                |
+| `POST /auth/login/2fa/resend`                     | Resend the login email OTP (email 2FA method only)                  |
+| `POST /auth/refresh`                              | Rotate session using the httpOnly refresh cookie                    |
+| `POST /auth/logout`                               | Clears session cookies                                              |
+| `GET /auth/me`                                    | Current user (cookie or `Authorization: Bearer`)                    |
+| `GET /auth/google` / `GET /auth/google/callback`  | Google login, 2FA-aware                                             |
+| `GET /auth/2fa/status`                            | Current 2FA status                                                  |
+| `POST /auth/2fa/totp/setup` / `.../totp/enable`   | Enable Google-Authenticator 2FA                                     |
+| `POST /auth/2fa/email/setup` / `.../email/enable` | Enable email-OTP 2FA                                                |
+| `POST /auth/2fa/disable`                          | Disable 2FA                                                         |
 
 ### Users (`/users`)
-| Method & path | Description |
-|---|---|
-| `GET /users/me` | Get profile |
+
+| Method & path     | Description    |
+| ----------------- | -------------- |
+| `GET /users/me`   | Get profile    |
 | `PATCH /users/me` | Update profile |
 
 ### Brokers (`/brokers`) — Phase 2
-| Method & path | Description |
-|---|---|
-| `GET /brokers` | Supported brokers (for the "Connect Broker" screen) |
-| `GET /brokers/connections` | My connections + status |
-| `POST /brokers/dhan/connect` | Connect Dhan (clientId + accessToken) |
-| `POST /brokers/zerodha/login-url` | Get the official Kite login URL |
-| `POST /brokers/zerodha/connect` | Finish Zerodha OAuth (exchange `request_token`) |
-| `POST /brokers/groww/connect` | Connect Groww (apiKey + apiSecret) |
-| `DELETE /brokers/{broker}` | Disconnect / revoke |
+
+| Method & path                     | Description                                         |
+| --------------------------------- | --------------------------------------------------- |
+| `GET /brokers`                    | Supported brokers (for the "Connect Broker" screen) |
+| `GET /brokers/connections`        | My connections + status                             |
+| `POST /brokers/dhan/connect`      | Connect Dhan (clientId + accessToken)               |
+| `POST /brokers/zerodha/login-url` | Get the official Kite login URL                     |
+| `POST /brokers/zerodha/connect`   | Finish Zerodha OAuth (exchange `request_token`)     |
+| `POST /brokers/groww/connect`     | Connect Groww (apiKey + apiSecret)                  |
+| `DELETE /brokers/{broker}`        | Disconnect / revoke                                 |
 
 ### Trading data — read from Postgres, refreshed by the background worker
-| Method & path | Description |
-|---|---|
-| `GET /orders?broker=dhan\|zerodha\|groww&segment=equity\|fno&page=1&limit=25` | Orders (paginated, includes `meta.lastSyncedAt`) |
-| `GET /positions?broker=...&segment=...&page=1&limit=25` | Open positions (paginated) |
-| `GET /funds?broker=...` | Available balance / margin used |
-| `POST /brokers/{broker}/sync` | "Sync now" — queues an immediate background refresh, returns `202` |
+
+| Method & path                                                                 | Description                                                        |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `GET /orders?broker=dhan\|zerodha\|groww&segment=equity\|fno&page=1&limit=25` | Orders (paginated, includes `meta.lastSyncedAt`)                   |
+| `GET /positions?broker=...&segment=...&page=1&limit=25`                       | Open positions (paginated)                                         |
+| `GET /funds?broker=...`                                                       | Available balance / margin used                                    |
+| `POST /brokers/{broker}/sync`                                                 | "Sync now" — queues an immediate background refresh, returns `202` |
 
 These never call the broker's API directly on the request thread — see
 [`CHANGELOG_SCALABILITY.md`](./CHANGELOG_SCALABILITY.md) for why and how.
 
 ### Strategies (`/strategies`) — Strategy Builder → Strategy JSON → Validator
+
 Full detail in [`CHANGELOG_PRODUCTION_AND_STRATEGY.md`](./CHANGELOG_PRODUCTION_AND_STRATEGY.md).
 
-| Method & path | Description |
-|---|---|
-| `POST /strategies` | Create (validated, versioned) |
-| `GET /strategies` | List mine, paginated, filterable |
-| `GET /strategies/:id` | Get one |
-| `PATCH /strategies/:id` | Update (blocked while active; creates a new version) |
-| `POST /strategies/:id/activate` / `.../pause` | Lifecycle |
-| `DELETE /strategies/:id` | Archive (soft-delete) |
-| `POST /strategies/:id/duplicate` | Clone into a new draft |
-| `GET /strategies/:id/versions` / `.../versions/:version` | Version history |
-| `POST /strategies/validate` | Dry-run validation |
-| `GET /strategies/meta/indicators` | Full DSL catalog for the builder UI |
+| Method & path                                            | Description                                          |
+| -------------------------------------------------------- | ---------------------------------------------------- |
+| `POST /strategies`                                       | Create (validated, versioned)                        |
+| `GET /strategies`                                        | List mine, paginated, filterable                     |
+| `GET /strategies/:id`                                    | Get one                                              |
+| `PATCH /strategies/:id`                                  | Update (blocked while active; creates a new version) |
+| `POST /strategies/:id/activate` / `.../pause`            | Lifecycle                                            |
+| `DELETE /strategies/:id`                                 | Archive (soft-delete)                                |
+| `POST /strategies/:id/duplicate`                         | Clone into a new draft                               |
+| `GET /strategies/:id/versions` / `.../versions/:version` | Version history                                      |
+| `POST /strategies/validate`                              | Dry-run validation                                   |
+| `GET /strategies/meta/indicators`                        | Full DSL catalog for the builder UI                  |
 
 Every one of these three endpoints calls the broker's live API through the adapter,
 **upserts** the result into our own Postgres tables (`orders`, `positions`, `funds` — this
@@ -259,6 +268,7 @@ npm run db:migrate:undo    # rollback last migration
 
 Per your instructions, this build stops here — the following are later phases per the docs
 and are not implemented yet:
+
 - Strategy builder / strategy engine / Strategy JSON DSL
 - Backtesting & paper trading engines
 - Risk engine, kill switch, OMS order-placement lifecycle beyond read/sync

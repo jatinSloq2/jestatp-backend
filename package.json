@@ -1,7 +1,7 @@
 {
-  "name": "algo-trading-backend",
+  "name": "Jest Algo Trading Platform : Backend",
   "version": "1.0.0",
-  "description": "Phase 1 backend for the Algo Trading Platform — Auth (JWT + Google OAuth), Broker Connect (Dhan/Zerodha/Groww), Orders/Positions/Funds sync, Swagger docs.",
+  "description": "Jest Algo Trading Platform — Auth (JWT + Google OAuth), Broker Connect (Dhan/Zerodha/Groww), Orders/Positions/Funds sync, Swagger docs.",
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -14,15 +14,7 @@
     "db:migrate:undo": "sequelize-cli db:migrate:undo",
     "db:seed": "sequelize-cli db:seed:all"
   },
-  "keywords": [
-    "algo-trading",
-    "nodejs",
-    "express",
-    "sequelize",
-    "swagger",
-    "bullmq",
-    "redis"
-  ],
+  "keywords": ["algo-trading","nodejs","express","sequelize","swagger","bullmq","redis"],
   "author": "",
   "license": "UNLICENSED",
   "dependencies": {

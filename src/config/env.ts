@@ -82,15 +82,6 @@ export const env = {
     failureRedirect: process.env.OAUTH_FAILURE_REDIRECT || 'http://localhost:3000/oauth/failure',
   },
 
-  brokers: {
-    dhan: { baseUrl: process.env.DHAN_API_BASE_URL || 'https://api.dhan.co' },
-    zerodha: {
-      baseUrl: process.env.ZERODHA_API_BASE_URL || 'https://api.kite.trade',
-      loginUrl: process.env.ZERODHA_LOGIN_URL || 'https://kite.zerodha.com/connect/login',
-    },
-    groww: { baseUrl: process.env.GROWW_API_BASE_URL || 'https://api.groww.in' },
-  },
-
   rateLimit: {
     windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
     max: Number(process.env.RATE_LIMIT_MAX) || 300,
@@ -113,12 +104,14 @@ export const env = {
     concurrency: Number(process.env.WORKER_CONCURRENCY) || 5,
   },
 
-  // The Python live-feed microservice (jestatp-feed-service) — websocket
-  // streaming for Groww/Zerodha/Dhan, used for options LTP during paper
-  // trading and any live-price UI. Internal docker-network address, never
-  // exposed publicly.
-  feedService: {
-    url: process.env.FEED_SERVICE_URL || 'http://localhost:8100',
-    internalToken: process.env.FEED_SERVICE_INTERNAL_TOKEN || 'change-me-in-env',
+  // The Python broker microservice (jestatp-broker-service) — owns every
+  // broker interaction via the official Dhan/Zerodha/Groww SDKs: live-feed
+  // websocket sessions AND trading (connect, orders, positions, holdings,
+  // funds, quotes, historical data). Node never calls a broker's REST API
+  // directly; everything goes through this service. Internal docker-network
+  // address, never exposed publicly.
+  brokerService: {
+    url: process.env.BROKER_SERVICE_URL || 'http://localhost:8100',
+    internalToken: process.env.BROKER_SERVICE_INTERNAL_TOKEN || 'change-me-in-env',
   },
 };

@@ -22,7 +22,7 @@ export const connectDhanHandler = asyncHandler(async (req: AuthenticatedRequest,
 
 export const zerodhaLoginUrlHandler = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const { apiKey } = req.body;
-  const url = brokerService.getZerodhaLoginUrl(apiKey);
+  const url = await brokerService.getZerodhaLoginUrl(apiKey);
   res.json({ success: true, data: { loginUrl: url } });
 });
 

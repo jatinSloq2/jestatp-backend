@@ -6,13 +6,13 @@ import { BrokerName } from '../../models/brokerConnection.model';
 import { FeedInstrument, FeedSessionStatus, FeedTick, FeedWsEnvelope } from './feed.types';
 
 function feedHttpUrl(path: string): string {
-  return new URL(path, env.feedService.url).toString();
+  return new URL(path, env.brokerService.url).toString();
 }
 
 function feedWsUrl(sessionId: string): string {
-  const httpUrl = new URL(`/ws/sessions/${sessionId}`, env.feedService.url);
+  const httpUrl = new URL(`/ws/sessions/${sessionId}`, env.brokerService.url);
   httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-  httpUrl.searchParams.set('token', env.feedService.internalToken);
+  httpUrl.searchParams.set('token', env.brokerService.internalToken);
   return httpUrl.toString();
 }
 
@@ -21,7 +21,7 @@ async function feedRequest<T>(path: string, init: RequestInit = {}): Promise<T> 
     ...init,
     headers: {
       'Content-Type': 'application/json',
-      'X-Internal-Token': env.feedService.internalToken,
+      'X-Internal-Token': env.brokerService.internalToken,
       ...init.headers,
     },
   });
@@ -95,7 +95,7 @@ export interface FeedStreamHandlers {
  */
 export function openFeedStream(sessionId: string, handlers: FeedStreamHandlers): WebSocket {
   const ws = new WebSocket(feedWsUrl(sessionId), {
-    headers: { 'X-Internal-Token': env.feedService.internalToken },
+    headers: { 'X-Internal-Token': env.brokerService.internalToken },
   });
 
   const pingInterval = setInterval(() => {
