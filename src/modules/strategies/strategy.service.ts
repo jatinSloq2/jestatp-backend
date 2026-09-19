@@ -15,6 +15,7 @@ export interface StrategyInput {
   segment?: 'equity' | 'fno' | 'currency' | 'commodity';
   timeframe: StrategyDefinition['timeframe'];
   broker: BrokerName;
+  productType?: 'CNC' | 'MIS' | 'NRML';
   executionMode?: 'paper' | 'live';
   language?: StrategyLanguage;
   // DSL strategies: both required. Python strategies: pythonCode required instead. See assertLanguagePayload.
@@ -91,6 +92,7 @@ export async function createStrategy(userId: string, input: StrategyInput) {
         segment: input.segment ?? 'equity',
         timeframe: input.timeframe,
         broker: input.broker,
+        productType: input.productType ?? 'MIS',
         executionMode: input.executionMode ?? 'paper',
         status: 'draft',
         currentVersion: 1,
@@ -174,6 +176,7 @@ export async function updateStrategy(userId: string, strategyId: string, input: 
     segment: input.segment ?? strategy.segment,
     timeframe: input.timeframe ?? strategy.timeframe,
     broker: input.broker ?? strategy.broker,
+    productType: input.productType ?? strategy.productType,
     executionMode: input.executionMode ?? strategy.executionMode,
     language,
     // When switching language, don't silently carry over the other
@@ -200,6 +203,7 @@ export async function updateStrategy(userId: string, strategyId: string, input: 
         segment: merged.segment,
         timeframe: merged.timeframe,
         broker: merged.broker,
+        productType: merged.productType,
         executionMode: merged.executionMode,
         language,
         entryConditions: merged.entry ?? null,
@@ -297,6 +301,7 @@ export async function duplicateStrategy(userId: string, strategyId: string) {
     segment: source.segment,
     timeframe: source.timeframe,
     broker: source.broker,
+    productType: source.productType,
     executionMode: 'paper', // duplicates always start in paper mode as a safety default
     language: source.language,
     entry: source.entryConditions ?? undefined,

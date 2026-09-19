@@ -22,6 +22,11 @@ export interface StrategyAttributes {
   // live/paper execution to know whose candles to fetch and (for live mode)
   // which broker account to place real orders on. See liveEngine.ts.
   broker: BrokerName;
+  // Explicit MIS/CNC/NRML choice for this strategy's live/paper orders — see
+  // liveEngine.ts's toOrderRequest, which used to infer this from timeframe.
+  // Kept separate from riskConfig since it's an order-mechanics choice, not
+  // a risk-management one.
+  productType: 'CNC' | 'MIS' | 'NRML';
   status: StrategyStatus;
   executionMode: ExecutionMode;
   currentVersion: number;
@@ -48,6 +53,7 @@ export type StrategyCreationAttributes = Optional<
   | 'lastValidatedAt'
   | 'segment'
   | 'language'
+  | 'productType'
   | 'entryConditions'
   | 'exitConditions'
   | 'pythonCode'
@@ -63,6 +69,7 @@ export class Strategy extends Model<StrategyAttributes, StrategyCreationAttribut
   public segment!: 'equity' | 'fno' | 'currency' | 'commodity';
   public timeframe!: Timeframe;
   public broker!: BrokerName;
+  public productType!: 'CNC' | 'MIS' | 'NRML';
   public status!: StrategyStatus;
   public executionMode!: ExecutionMode;
   public currentVersion!: number;
@@ -115,6 +122,11 @@ Strategy.init(
     broker: {
       type: DataTypes.ENUM('dhan', 'zerodha', 'groww'),
       allowNull: false,
+    },
+    productType: {
+      type: DataTypes.ENUM('CNC', 'MIS', 'NRML'),
+      allowNull: false,
+      defaultValue: 'MIS',
     },
     status: {
       type: DataTypes.ENUM('draft', 'active', 'paused', 'archived'),

@@ -11,3 +11,4 @@ export { Strategy } from './strategy.model';
 export { StrategyVersion } from './strategyVersion.model';
 export { StrategyRuntimeState } from './strategyRuntimeState.model';
 export { StrategyTrade } from './strategyTrade.model';
+export { Alert } from './alert.model';

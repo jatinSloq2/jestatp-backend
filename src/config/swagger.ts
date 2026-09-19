@@ -31,6 +31,7 @@ const options: swaggerJsdoc.Options = {
       { name: 'Positions', description: 'Live positions (equity delivery + F&O) synced from the broker' },
       { name: 'Funds', description: "User's available balance / margin" },
       { name: 'Strategies', description: 'Strategy Builder output — create, version, validate, and manage the lifecycle of a Strategy JSON' },
+      { name: 'Alerts', description: 'Events raised by the live trading engine that need a human to look (rejected orders, stuck positions, etc)' },
     ],
   },
   apis: ['./src/modules/**/*.routes.ts', './dist/modules/**/*.routes.js'],

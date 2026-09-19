@@ -3,6 +3,7 @@ import { PersistedOpenPosition } from '../../../models/strategyRuntimeState.mode
 import { getHistoricalCandles } from '../../brokers/broker.service';
 import { OrderRequest } from '../../brokers/adapters/brokerAdapter.interface';
 import { placeOrder } from '../../orders/orderPlacement.service';
+import { raiseAlert } from '../../alerts/alerting.service';
 import { executeStrategy } from '../sandbox/sandboxService.client';
 import { ConditionEvaluator } from '../backtest/conditionEvaluator';
 import { simulateTrades, BacktestTrade, OpenPositionSnapshot } from '../backtest/backtestEngine';
@@ -83,6 +84,14 @@ export async function runStrategyTick(strategy: Strategy): Promise<void> {
 
     if (!result.ok) {
       logger.error(`Strategy ${strategy.id} (python): sandbox execution failed - ${result.error}`);
+      await raiseAlert({
+        userId: strategy.userId,
+        strategyId: strategy.id,
+        severity: strategy.executionMode === 'live' ? 'critical' : 'warning',
+        type: 'strategy_execution_error',
+        message: `Your Python strategy "${strategy.name}" failed to execute: ${result.error}`,
+        metadata: { traceback: result.traceback },
+      });
       return; // leave state untouched so the next tick retries from the same point
     }
     newPythonState = result.state;
@@ -123,6 +132,14 @@ export async function runStrategyTick(strategy: Strategy): Promise<void> {
         `Strategy ${strategy.id}: runtime state shows an open position (entry ${wasOpen.entryTimestamp}) that the fresh ` +
           `simulation no longer accounts for - leaving state untouched so this can be investigated rather than guessing.`,
       );
+      await raiseAlert({
+        userId: strategy.userId,
+        strategyId: strategy.id,
+        severity: strategy.executionMode === 'live' ? 'critical' : 'warning',
+        type: 'strategy_execution_error',
+        message: `Your strategy "${strategy.name}" has an inconsistent internal state and has been paused from acting until this is investigated.`,
+        metadata: { openPositionEntryTimestamp: wasOpen.entryTimestamp },
+      });
       return;
     }
   }
@@ -165,9 +182,7 @@ function toOrderRequest(strategy: Strategy, side: 'BUY' | 'SELL', quantity: numb
     exchange: strategy.exchange,
     side,
     orderType: 'MARKET', // strategy signals fire on a closed bar's decision, not a specific limit price - market orders match that intent
-    // MIS (intraday, auto-squared-off) for anything faster than daily bars, CNC (delivery) for daily strategies.
-    // No per-strategy override yet - a reasonable default until the risk config exposes one explicitly.
-    productType: strategy.timeframe === '1d' ? 'CNC' : 'MIS',
+    productType: strategy.productType,
     quantity,
     segment: strategy.segment,
   };
@@ -194,6 +209,14 @@ async function openTrade(strategy: Strategy, snapshot: OpenPositionSnapshot): Pr
     const order = await placeOrder(connection, toOrderRequest(strategy, 'BUY', snapshot.quantity), { strategyId: strategy.id });
     if (order.status === 'REJECTED') {
       logger.error(`Strategy ${strategy.id}: live ENTRY order rejected (${order.statusMessage}) - never actually entered, staying flat.`);
+      await raiseAlert({
+        userId: strategy.userId,
+        strategyId: strategy.id,
+        severity: 'critical',
+        type: 'live_entry_rejected',
+        message: `Your strategy "${strategy.name}" tried to enter a position (${snapshot.quantity} @ ${snapshot.entryPrice}) but ${strategy.broker} rejected the order: ${order.statusMessage ?? 'no reason given'}. No position was opened.`,
+        metadata: { orderId: order.id, snapshot },
+      });
       await tradeRow.destroy(); // the entry never happened - don't leave a phantom trade row behind
       return null;
     }
@@ -201,6 +224,14 @@ async function openTrade(strategy: Strategy, snapshot: OpenPositionSnapshot): Pr
     return { ...snapshot, tradeId: tradeRow.id, entryOrderId: order.id };
   } catch (err) {
     logger.error(`Strategy ${strategy.id}: failed to place live entry order - ${(err as Error).message}. Staying flat.`);
+    await raiseAlert({
+      userId: strategy.userId,
+      strategyId: strategy.id,
+      severity: 'critical',
+      type: 'live_entry_failed',
+      message: `Your strategy "${strategy.name}" tried to enter a position but placing the order with ${strategy.broker} failed: ${(err as Error).message}. No position was opened.`,
+      metadata: { snapshot },
+    });
     await tradeRow.destroy();
     return null;
   }
@@ -228,6 +259,14 @@ async function closeTrade(strategy: Strategy, position: PersistedOpenPosition, t
         `Strategy ${strategy.id}: live EXIT order REJECTED (${order.statusMessage}) - the strategy still holds this position ` +
           `at the broker. Will retry next tick. If this keeps failing, close the position manually.`,
       );
+      await raiseAlert({
+        userId: strategy.userId,
+        strategyId: strategy.id,
+        severity: 'critical',
+        type: 'live_exit_rejected',
+        message: `Your strategy "${strategy.name}" tried to exit its position (${position.quantity} @ market) but ${strategy.broker} rejected the order: ${order.statusMessage ?? 'no reason given'}. You still hold this position — the strategy will keep retrying, but please check it manually.`,
+        metadata: { orderId: order.id, position },
+      });
       return false;
     }
     await StrategyTrade.update(
@@ -240,6 +279,14 @@ async function closeTrade(strategy: Strategy, position: PersistedOpenPosition, t
       `Strategy ${strategy.id}: failed to place live exit order - ${(err as Error).message}. Still holding this position at the ` +
         `broker - will retry next tick.`,
     );
+    await raiseAlert({
+      userId: strategy.userId,
+      strategyId: strategy.id,
+      severity: 'critical',
+      type: 'live_exit_failed',
+      message: `Your strategy "${strategy.name}" tried to exit its position but placing the order with ${strategy.broker} failed: ${(err as Error).message}. You still hold this position — the strategy will keep retrying, but please check it manually.`,
+      metadata: { position },
+    });
     return false;
   }
 }

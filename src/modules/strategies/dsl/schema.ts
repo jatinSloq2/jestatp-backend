@@ -199,6 +199,7 @@ export const strategyDefinitionSchema = Joi.object({
     .valid(...TIMEFRAMES)
     .required(),
   broker: Joi.string().valid('dhan', 'zerodha', 'groww').required(),
+  productType: Joi.string().valid('CNC', 'MIS', 'NRML').optional(),
   executionMode: Joi.string().valid('paper', 'live').optional(),
   language: Joi.string().valid('dsl', 'python').default('dsl'),
   // Whether entry/exit vs. pythonCode is actually required depends on
