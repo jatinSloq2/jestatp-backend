@@ -2,6 +2,7 @@ import { DataTypes, Model, Optional } from 'sequelize';
 import { sequelize } from '../config/database';
 import { User } from './user.model';
 import { BrokerConnection } from './brokerConnection.model';
+import { Strategy } from './strategy.model';
 
 export type OrderSegment = 'equity' | 'fno' | 'currency' | 'commodity';
 export type OrderSide = 'BUY' | 'SELL';
@@ -24,6 +25,11 @@ export interface OrderAttributes {
   brokerConnectionId: string;
   broker: string;
   brokerOrderId: string | null;
+  // Set only when this order was placed automatically by a strategy's live
+  // execution (see orderPlacement.service.ts); null for manual orders.
+  // ON DELETE SET NULL — losing the strategy link must never delete real
+  // order history.
+  strategyId: string | null;
   exchange: string;
   segment: OrderSegment;
   tradingSymbol: string;
@@ -48,6 +54,7 @@ export type OrderCreationAttributes = Optional<
   OrderAttributes,
   | 'id'
   | 'brokerOrderId'
+  | 'strategyId'
   | 'instrumentToken'
   | 'filledQuantity'
   | 'price'
@@ -65,6 +72,7 @@ export class Order extends Model<OrderAttributes, OrderCreationAttributes> imple
   public brokerConnectionId!: string;
   public broker!: string;
   public brokerOrderId!: string | null;
+  public strategyId!: string | null;
   public exchange!: string;
   public segment!: OrderSegment;
   public tradingSymbol!: string;
@@ -103,7 +111,20 @@ Order.init(
       onUpdate: 'CASCADE',
     },
     broker: { type: DataTypes.STRING(20), allowNull: false },
-    brokerOrderId: { type: DataTypes.STRING, allowNull: true },
+    // unique (nullable-safe — Postgres allows multiple NULL rows in a
+    // unique index) so Order.upsert() in brokerSync.service.ts can actually
+    // target this column in its ON CONFLICT clause instead of blindly
+    // inserting a duplicate row every sync cycle. See migration
+    // 20260101000016 for why this matters now that orderPlacement.service.ts
+    // creates rows here before the broker sync job ever sees them.
+    brokerOrderId: { type: DataTypes.STRING, allowNull: true, unique: true },
+    strategyId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: { model: Strategy, key: 'id' },
+      onDelete: 'SET NULL',
+      onUpdate: 'CASCADE',
+    },
     exchange: { type: DataTypes.STRING(10), allowNull: false },
     segment: {
       type: DataTypes.ENUM('equity', 'fno', 'currency', 'commodity'),
@@ -157,3 +178,5 @@ User.hasMany(Order, { foreignKey: 'userId', as: 'orders' });
 Order.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 BrokerConnection.hasMany(Order, { foreignKey: 'brokerConnectionId', as: 'orders' });
 Order.belongsTo(BrokerConnection, { foreignKey: 'brokerConnectionId', as: 'brokerConnection' });
+Strategy.hasMany(Order, { foreignKey: 'strategyId', as: 'orders' });
+Order.belongsTo(Strategy, { foreignKey: 'strategyId' });

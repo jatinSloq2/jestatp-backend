@@ -2,7 +2,7 @@ import { DataTypes, Model, Optional } from 'sequelize';
 import { sequelize } from '../config/database';
 import { Strategy } from './strategy.model';
 
-export interface OpenPositionSnapshot {
+export interface PersistedOpenPosition {
   entryIndex: number;
   entryTimestamp: number;
   entryPrice: number;
@@ -10,13 +10,22 @@ export interface OpenPositionSnapshot {
   stopLossPrice: number;
   targetPrice: number;
   trailingStopPrice: number | null;
+  // The StrategyTrade row created when this position was opened — closing
+  // the position UPDATES this same row (exit fields) rather than creating a
+  // second one. See liveEngine.ts.
+  tradeId: string;
+  // Set only for executionMode='live' strategies once the entry order was
+  // actually placed (see orderPlacement.service.ts); null for paper trades
+  // and for live orders that were rejected (in which case the position was
+  // never actually opened — see liveEngine.ts's handling of a REJECTED entry).
+  entryOrderId: string | null;
 }
 
 export interface StrategyRuntimeStateAttributes {
   id: string;
   strategyId: string;
   lastProcessedBarTimestamp: number | null;
-  openPosition: OpenPositionSnapshot | null;
+  openPosition: PersistedOpenPosition | null;
   pythonState: Record<string, unknown>;
   tradesToday: number;
   lossToday: number;
@@ -43,7 +52,7 @@ export class StrategyRuntimeState
   public id!: string;
   public strategyId!: string;
   public lastProcessedBarTimestamp!: number | null;
-  public openPosition!: OpenPositionSnapshot | null;
+  public openPosition!: PersistedOpenPosition | null;
   public pythonState!: Record<string, unknown>;
   public tradesToday!: number;
   public lossToday!: number;

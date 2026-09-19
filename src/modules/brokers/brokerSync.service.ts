@@ -5,14 +5,14 @@ import { buildBrokerAdapter } from './adapters/brokerAdapter.factory';
 import { logger } from '../../utils/logger';
 
 /** Product type differs slightly per broker; normalize CNC/MIS/NRML-ish values. */
-function normalizeProductType(p: string): 'CNC' | 'MIS' | 'NRML' {
+export function normalizeProductType(p: string): 'CNC' | 'MIS' | 'NRML' {
   const up = (p || '').toUpperCase();
   if (up.includes('MIS') || up.includes('INTRADAY')) return 'MIS';
   if (up.includes('NRML') || up.includes('CARRYFORWARD') || up.includes('CF')) return 'NRML';
   return 'CNC';
 }
 
-function mapBrokerStatus(status: string): Order['status'] {
+export function mapBrokerStatus(status: string): Order['status'] {
   const s = (status || '').toUpperCase();
   if (s.includes('REJECT')) return 'REJECTED';
   if (s.includes('CANCEL')) return 'CANCELLED';

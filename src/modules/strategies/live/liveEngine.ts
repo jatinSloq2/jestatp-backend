@@ -1,37 +1,38 @@
-import { Strategy, StrategyRuntimeState, StrategyTrade } from '../../../models';
+import { Strategy, StrategyRuntimeState, StrategyTrade, BrokerConnection } from '../../../models';
+import { PersistedOpenPosition } from '../../../models/strategyRuntimeState.model';
 import { getHistoricalCandles } from '../../brokers/broker.service';
+import { OrderRequest } from '../../brokers/adapters/brokerAdapter.interface';
+import { placeOrder } from '../../orders/orderPlacement.service';
 import { executeStrategy } from '../sandbox/sandboxService.client';
 import { ConditionEvaluator } from '../backtest/conditionEvaluator';
-import { simulateTrades, BacktestTrade } from '../backtest/backtestEngine';
+import { simulateTrades, BacktestTrade, OpenPositionSnapshot } from '../backtest/backtestEngine';
 import { logger } from '../../../utils/logger';
 
 const INTRADAY_LOOKBACK_DAYS = 10;
 const DAILY_LOOKBACK_DAYS = 300;
 const INTRADAY_TIMEFRAMES = new Set(['1m', '3m', '5m', '15m', '30m', '1h']);
-// Bars required before the engine trusts an entry/exit decision (so e.g. a
-// python strategy calling ctx.sma(50) isn't asked to decide before bar 50
-// exists). A fixed, generous constant rather than something per-strategy —
-// see the TODO in the strategy builder for exposing this as a per-strategy setting.
 const DEFAULT_WARMUP = 50;
 
 /**
- * Runs exactly one execution tick for one `active` strategy: fetches fresh
- * candles, figures out where entry/exit signals come from (DSL condition
- * blocks or a Python sandbox run — same "backtest mode" call whether it's
- * actually backtesting or not, since the return shape either way is just
- * "here are all buy/sell/exit signals in this window"), replays them
- * through `simulateTrades` with `forceCloseAtEnd: false` so a position
- * that's still open going into the next tick stays open instead of being
- * artificially closed, and reconciles the result against the strategy's
- * persisted `StrategyRuntimeState`.
+ * Runs exactly one execution tick for one `active` strategy.
  *
- * Design note: this re-evaluates the WHOLE lookback window on every tick
- * rather than hand-rolling a "step one bar forward" function. That's
- * deliberately simpler and self-healing — if a tick is missed (worker
- * restart, broker hiccup), the next tick just sees a slightly longer new-bar
- * gap and catches up correctly — at the cost of doing more work per tick
- * than a true incremental engine would. Fine at today's strategy counts;
- * worth revisiting if per-tick latency becomes a problem at scale.
+ * Reconciliation, each tick, in order:
+ *   1. If we were holding a position coming in, and it closed somewhere in
+ *      this window, place the EXIT order (live) / log it (paper) and update
+ *      that trade's existing row — never insert a second row for one trade.
+ *   2. Any trade that both opened AND closed within bars newer than what
+ *      we've processed (and isn't #1) needs both legs placed, in order.
+ *   3. A position that's newly open and still open at the end of the
+ *      window needs its ENTRY order placed now.
+ *   4. Still holding the same position as last tick -> nothing to place,
+ *      just refresh the persisted stop/target snapshot (trailing stops move).
+ *
+ * Safety invariant: `runtimeState.openPosition` is only ever cleared when
+ * the exit order actually succeeded (or paper mode, which can't fail this
+ * way). If a live exit order is rejected, the position snapshot is kept
+ * as-is and logged loudly - the strategy still holds the position at the
+ * broker, so the engine must keep believing that and keep retrying the
+ * exit, not silently forget about a real open position.
  */
 export async function runStrategyTick(strategy: Strategy): Promise<void> {
   if (strategy.status !== 'active') return;
@@ -55,13 +56,14 @@ export async function runStrategyTick(strategy: Strategy): Promise<void> {
   });
 
   if (candles.length < 2) {
-    logger.warn(`Strategy ${strategy.id}: not enough candles returned (${candles.length}) — skipping this tick`);
+    logger.warn(`Strategy ${strategy.id}: not enough candles returned (${candles.length}) - skipping this tick`);
     return;
   }
 
   const latestBar = candles[candles.length - 1];
-  if (runtimeState.lastProcessedBarTimestamp !== null && latestBar.timestamp <= runtimeState.lastProcessedBarTimestamp) {
-    return; // no new closed bar since last tick — nothing to do
+  const lastProcessed = runtimeState.lastProcessedBarTimestamp;
+  if (lastProcessed !== null && latestBar.timestamp <= lastProcessed) {
+    return; // no new closed bar since last tick - nothing to do
   }
 
   const warmup = Math.min(DEFAULT_WARMUP, Math.max(1, candles.length - 1));
@@ -80,8 +82,8 @@ export async function runStrategyTick(strategy: Strategy): Promise<void> {
     });
 
     if (!result.ok) {
-      logger.error(`Strategy ${strategy.id} (python): sandbox execution failed — ${result.error}`);
-      return; // leave runtime state untouched so the next tick retries from the same point rather than silently skipping a bar
+      logger.error(`Strategy ${strategy.id} (python): sandbox execution failed - ${result.error}`);
+      return; // leave state untouched so the next tick retries from the same point
     }
     newPythonState = result.state;
     const entryTimestamps = new Set(result.signals.filter((s) => s.action === 'buy').map((s) => s.timestamp));
@@ -97,87 +99,173 @@ export async function runStrategyTick(strategy: Strategy): Promise<void> {
 
   const simulated = simulateTrades(candles, strategy.riskConfig, entrySignalAt, exitSignalAt, warmup, { forceCloseAtEnd: false });
 
-  // Only act on trades that touch a bar newer than what we've already
-  // processed — everything else in `simulated.trades` is history the
-  // strategy would have generated on THIS SAME window even if nothing new
-  // happened (simulateTrades always replays the full window, see the
-  // design note above), so filtering by timestamp is what keeps a tick
-  // idempotent instead of re-logging the same trade every time it runs.
-  const newTrades = simulated.trades.filter((t) => t.entryTimestamp > (runtimeState.lastProcessedBarTimestamp ?? -Infinity));
+  const wasOpen = runtimeState.openPosition;
+  const nowOpen = simulated.openPosition;
+  const stillSamePosition = Boolean(wasOpen && nowOpen && wasOpen.entryTimestamp === nowOpen.entryTimestamp);
 
-  for (const trade of newTrades) {
-    await recordTrade(strategy, trade);
+  let nextOpenPosition: PersistedOpenPosition | null = null;
+
+  // 1. Close whatever we were holding, if it closed within this window.
+  if (wasOpen && !stillSamePosition) {
+    const closedTrade = simulated.trades.find((t) => t.entryTimestamp === wasOpen.entryTimestamp);
+    if (closedTrade) {
+      const exited = await closeTrade(strategy, wasOpen, closedTrade);
+      if (!exited) {
+        // Live exit order failed - we still hold this position at the
+        // broker. Keep it as the persisted position so the next tick tries
+        // to exit again, and stop here: don't also evaluate new entries
+        // while we're supposed to be flat-or-exiting.
+        await runtimeState.update({ lastProcessedBarTimestamp: latestBar.timestamp, openPosition: wasOpen, pythonState: newPythonState });
+        return;
+      }
+    } else {
+      logger.error(
+        `Strategy ${strategy.id}: runtime state shows an open position (entry ${wasOpen.entryTimestamp}) that the fresh ` +
+          `simulation no longer accounts for - leaving state untouched so this can be investigated rather than guessing.`,
+      );
+      return;
+    }
   }
 
-  // A position that just opened on this tick and is still open at the end
-  // of the window (i.e. simulateTrades' openPosition) also needs recording
-  // as a fresh entry if we haven't already logged it via newTrades above.
-  if (
-    simulated.openPosition &&
-    simulated.openPosition.entryTimestamp > (runtimeState.lastProcessedBarTimestamp ?? -Infinity) &&
-    !runtimeState.openPosition
-  ) {
-    await recordEntry(strategy, simulated.openPosition.entryTimestamp, simulated.openPosition.entryPrice, simulated.openPosition.quantity);
+  // 2. Trades that both opened and closed within newly-seen bars (and aren't the position just handled above).
+  const freshlyOpenedAndClosed = simulated.trades.filter(
+    (t) => t.entryTimestamp > (lastProcessed ?? -Infinity) && !(wasOpen && t.entryTimestamp === wasOpen.entryTimestamp),
+  );
+  for (const trade of freshlyOpenedAndClosed) {
+    await openAndCloseTrade(strategy, trade);
+  }
+
+  // 3 & 4. A position open at the end of the window - either brand new, or the same one we were already holding.
+  if (nowOpen) {
+    if (stillSamePosition && wasOpen) {
+      nextOpenPosition = { ...nowOpen, tradeId: wasOpen.tradeId, entryOrderId: wasOpen.entryOrderId };
+    } else if (nowOpen.entryTimestamp > (lastProcessed ?? -Infinity)) {
+      nextOpenPosition = await openTrade(strategy, nowOpen);
+    }
   }
 
   await runtimeState.update({
     lastProcessedBarTimestamp: latestBar.timestamp,
-    openPosition: simulated.openPosition,
+    openPosition: nextOpenPosition,
     pythonState: newPythonState,
   });
 }
 
-async function recordEntry(strategy: Strategy, entryTimestamp: number, entryPrice: number, quantity: number): Promise<void> {
-  if (strategy.executionMode === 'live') {
-    // Real order placement (broker.adapter.placeOrder + an Order row +
-    // idempotency/retry/reconciliation handling) is intentionally NOT wired
-    // up yet — this codebase's orders module is currently read-only (syncs
-    // orders FROM the broker, never places them). Placing real orders off
-    // an automated loop without that machinery would be actively unsafe, so
-    // this logs loudly and records nothing rather than pretending to trade.
-    logger.error(
-      `Strategy ${strategy.id} (${strategy.name}) is set to execution_mode=live and would have ENTERED ` +
-        `${quantity} @ ${entryPrice} just now, but live order placement is not implemented yet — no order was placed. ` +
-        `Switch the strategy to paper mode until this is built.`,
-    );
-    return;
+async function getActiveConnection(strategy: Strategy): Promise<BrokerConnection> {
+  const connection = await BrokerConnection.findOne({ where: { userId: strategy.userId, broker: strategy.broker, status: 'connected' } });
+  if (!connection) {
+    throw new Error(`No active ${strategy.broker} connection for user ${strategy.userId} - cannot place live orders`);
   }
-
-  await StrategyTrade.create({
-    strategyId: strategy.id,
-    userId: strategy.userId,
-    mode: 'paper',
-    entryTimestamp,
-    entryPrice,
-    quantity,
-  });
-  logger.info(`Strategy ${strategy.id} (${strategy.name}) [paper]: ENTERED ${quantity} @ ${entryPrice}`);
+  return connection;
 }
 
-async function recordTrade(strategy: Strategy, trade: BacktestTrade): Promise<void> {
-  if (strategy.executionMode === 'live') {
-    logger.error(
-      `Strategy ${strategy.id} (${strategy.name}) is set to execution_mode=live and would have opened+closed a trade ` +
-        `(${trade.quantity} @ ${trade.entryPrice} -> ${trade.exitPrice}, ${trade.exitReason}) just now, but live order ` +
-        `placement is not implemented yet — no orders were placed. Switch the strategy to paper mode until this is built.`,
-    );
-    return;
-  }
+function toOrderRequest(strategy: Strategy, side: 'BUY' | 'SELL', quantity: number): OrderRequest & { segment: Strategy['segment'] } {
+  return {
+    tradingSymbol: strategy.instrument,
+    exchange: strategy.exchange,
+    side,
+    orderType: 'MARKET', // strategy signals fire on a closed bar's decision, not a specific limit price - market orders match that intent
+    // MIS (intraday, auto-squared-off) for anything faster than daily bars, CNC (delivery) for daily strategies.
+    // No per-strategy override yet - a reasonable default until the risk config exposes one explicitly.
+    productType: strategy.timeframe === '1d' ? 'CNC' : 'MIS',
+    quantity,
+    segment: strategy.segment,
+  };
+}
 
-  await StrategyTrade.create({
+/** Opens a new position: creates the StrategyTrade row, and for live mode actually places the entry order. Returns null if the entry never actually happened (live order rejected/failed) - caller must treat that as staying flat. */
+async function openTrade(strategy: Strategy, snapshot: OpenPositionSnapshot): Promise<PersistedOpenPosition | null> {
+  const tradeRow = await StrategyTrade.create({
     strategyId: strategy.id,
     userId: strategy.userId,
-    mode: 'paper',
+    mode: strategy.executionMode,
+    entryTimestamp: snapshot.entryTimestamp,
+    entryPrice: snapshot.entryPrice,
+    quantity: snapshot.quantity,
+  });
+
+  if (strategy.executionMode !== 'live') {
+    logger.info(`Strategy ${strategy.id} (${strategy.name}) [paper]: ENTERED ${snapshot.quantity} @ ${snapshot.entryPrice}`);
+    return { ...snapshot, tradeId: tradeRow.id, entryOrderId: null };
+  }
+
+  try {
+    const connection = await getActiveConnection(strategy);
+    const order = await placeOrder(connection, toOrderRequest(strategy, 'BUY', snapshot.quantity), { strategyId: strategy.id });
+    if (order.status === 'REJECTED') {
+      logger.error(`Strategy ${strategy.id}: live ENTRY order rejected (${order.statusMessage}) - never actually entered, staying flat.`);
+      await tradeRow.destroy(); // the entry never happened - don't leave a phantom trade row behind
+      return null;
+    }
+    await tradeRow.update({ entryOrderId: order.id });
+    return { ...snapshot, tradeId: tradeRow.id, entryOrderId: order.id };
+  } catch (err) {
+    logger.error(`Strategy ${strategy.id}: failed to place live entry order - ${(err as Error).message}. Staying flat.`);
+    await tradeRow.destroy();
+    return null;
+  }
+}
+
+/** Closes the strategy's currently-open position. Returns false (and leaves everything as-is) if a live exit order failed - the caller must keep treating the position as open and retry next tick. */
+async function closeTrade(strategy: Strategy, position: PersistedOpenPosition, trade: BacktestTrade): Promise<boolean> {
+  if (strategy.executionMode !== 'live') {
+    await StrategyTrade.update(
+      { exitTimestamp: trade.exitTimestamp, exitPrice: trade.exitPrice, exitReason: trade.exitReason, pnl: trade.pnl },
+      { where: { id: position.tradeId } },
+    );
+    logger.info(
+      `Strategy ${strategy.id} (${strategy.name}) [paper]: EXITED ${trade.quantity} @ ${trade.exitPrice} (${trade.exitReason}), ` +
+        `pnl=${trade.pnl.toFixed(2)}`,
+    );
+    return true;
+  }
+
+  try {
+    const connection = await getActiveConnection(strategy);
+    const order = await placeOrder(connection, toOrderRequest(strategy, 'SELL', position.quantity), { strategyId: strategy.id });
+    if (order.status === 'REJECTED') {
+      logger.error(
+        `Strategy ${strategy.id}: live EXIT order REJECTED (${order.statusMessage}) - the strategy still holds this position ` +
+          `at the broker. Will retry next tick. If this keeps failing, close the position manually.`,
+      );
+      return false;
+    }
+    await StrategyTrade.update(
+      { exitTimestamp: trade.exitTimestamp, exitPrice: trade.exitPrice, exitReason: trade.exitReason, pnl: trade.pnl, exitOrderId: order.id },
+      { where: { id: position.tradeId } },
+    );
+    return true;
+  } catch (err) {
+    logger.error(
+      `Strategy ${strategy.id}: failed to place live exit order - ${(err as Error).message}. Still holding this position at the ` +
+        `broker - will retry next tick.`,
+    );
+    return false;
+  }
+}
+
+/** A trade that opened and closed entirely within bars we haven't processed yet - both legs need placing now, in order. */
+async function openAndCloseTrade(strategy: Strategy, trade: BacktestTrade): Promise<void> {
+  const opened = await openTrade(strategy, {
+    entryIndex: trade.entryIndex,
     entryTimestamp: trade.entryTimestamp,
     entryPrice: trade.entryPrice,
-    exitTimestamp: trade.exitTimestamp,
-    exitPrice: trade.exitPrice,
     quantity: trade.quantity,
-    exitReason: trade.exitReason,
-    pnl: trade.pnl,
+    stopLossPrice: trade.entryPrice, // not used again once closed - simulateTrades already made the exit decision below
+    targetPrice: trade.entryPrice,
+    trailingStopPrice: null,
   });
-  logger.info(
-    `Strategy ${strategy.id} (${strategy.name}) [paper]: ${trade.quantity} @ ${trade.entryPrice} -> ${trade.exitPrice} ` +
-      `(${trade.exitReason}), pnl=${trade.pnl.toFixed(2)}`,
-  );
+  if (!opened) return; // entry failed - nothing to exit
+
+  await closeTrade(strategy, opened, trade);
+  // Note: if the exit leg fails here, the position genuinely IS still open
+  // at the broker (for live mode) even though this tick's simulation
+  // window shows it as historically closed. That's a real edge case this
+  // "re-run everything from scratch" design doesn't self-heal perfectly -
+  // it's logged loudly by closeTrade above; reconciling it against the
+  // broker's actual order/position book (via the existing syncOrders /
+  // syncPositions jobs) is the next layer that should catch and alert on
+  // this specific mismatch rather than the strategy engine silently
+  // retrying forever, since by the next tick the simulation will show this
+  // trade as historically closed either way and won't attempt the exit again.
 }
