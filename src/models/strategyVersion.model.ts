@@ -1,6 +1,6 @@
 import { DataTypes, Model, Optional } from 'sequelize';
 import { sequelize } from '../config/database';
-import { Strategy } from './strategy.model';
+import { Strategy, StrategyLanguage } from './strategy.model';
 import { User } from './user.model';
 import { EntryBlock, ExitBlock, RiskConfig } from '../modules/strategies/dsl/types';
 
@@ -9,15 +9,20 @@ export interface StrategyVersionAttributes {
   strategyId: string;
   version: number;
   name: string;
-  entryConditions: EntryBlock;
-  exitConditions: ExitBlock;
+  language: StrategyLanguage;
+  entryConditions: EntryBlock | null;
+  exitConditions: ExitBlock | null;
+  pythonCode: string | null;
   riskConfig: RiskConfig;
   changeNote: string | null;
   createdBy: string | null;
   createdAt?: Date;
 }
 
-export type StrategyVersionCreationAttributes = Optional<StrategyVersionAttributes, 'id' | 'changeNote' | 'createdBy'>;
+export type StrategyVersionCreationAttributes = Optional<
+  StrategyVersionAttributes,
+  'id' | 'changeNote' | 'createdBy' | 'language' | 'entryConditions' | 'exitConditions' | 'pythonCode'
+>;
 
 export class StrategyVersion
   extends Model<StrategyVersionAttributes, StrategyVersionCreationAttributes>
@@ -27,8 +32,10 @@ export class StrategyVersion
   public strategyId!: string;
   public version!: number;
   public name!: string;
-  public entryConditions!: EntryBlock;
-  public exitConditions!: ExitBlock;
+  public language!: StrategyLanguage;
+  public entryConditions!: EntryBlock | null;
+  public exitConditions!: ExitBlock | null;
+  public pythonCode!: string | null;
   public riskConfig!: RiskConfig;
   public changeNote!: string | null;
   public createdBy!: string | null;
@@ -47,8 +54,10 @@ StrategyVersion.init(
     },
     version: { type: DataTypes.INTEGER, allowNull: false },
     name: { type: DataTypes.STRING(150), allowNull: false },
-    entryConditions: { type: DataTypes.JSONB, allowNull: false },
-    exitConditions: { type: DataTypes.JSONB, allowNull: false },
+    language: { type: DataTypes.ENUM('dsl', 'python'), allowNull: false, defaultValue: 'dsl' },
+    entryConditions: { type: DataTypes.JSONB, allowNull: true },
+    exitConditions: { type: DataTypes.JSONB, allowNull: true },
+    pythonCode: { type: DataTypes.TEXT, allowNull: true },
     riskConfig: { type: DataTypes.JSONB, allowNull: false },
     changeNote: { type: DataTypes.STRING(255), allowNull: true },
     createdBy: {

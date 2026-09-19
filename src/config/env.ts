@@ -104,6 +104,16 @@ export const env = {
     concurrency: Number(process.env.WORKER_CONCURRENCY) || 5,
   },
 
+  strategyExecution: {
+    // How often (seconds) the worker checks every `active` strategy for a
+    // new closed candle to react to. Independent of each strategy's own
+    // timeframe — a tick against a strategy with no new bar yet is a cheap
+    // no-op (see liveEngine.ts), so this can safely be shorter than the
+    // fastest supported timeframe (1m) without wasting broker API calls.
+    schedulerIntervalSeconds: Number(process.env.STRATEGY_EXECUTION_INTERVAL_SECONDS) || 30,
+    concurrency: Number(process.env.STRATEGY_EXECUTION_CONCURRENCY) || 3,
+  },
+
   // The Python broker microservice (jestatp-broker-service) — owns every
   // broker interaction via the official Dhan/Zerodha/Groww SDKs: live-feed
   // websocket sessions AND trading (connect, orders, positions, holdings,
@@ -113,5 +123,9 @@ export const env = {
   brokerService: {
     url: process.env.BROKER_SERVICE_URL || 'http://localhost:8100',
     internalToken: process.env.BROKER_SERVICE_INTERNAL_TOKEN || 'change-me-in-env',
+  },
+  sandboxService: {
+    url: process.env.SANDBOX_SERVICE_URL || 'http://localhost:8200',
+    internalToken: process.env.SANDBOX_SERVICE_INTERNAL_TOKEN || 'change-me-in-env',
   },
 };

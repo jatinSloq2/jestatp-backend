@@ -60,7 +60,7 @@ export const getVersionHandler = asyncHandler(async (req: AuthenticatedRequest, 
 });
 
 export const validateStrategyHandler = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-  const result = strategyService.validateDefinitionOnly(req.body);
+  const result = await strategyService.validateDefinitionOnly(req.body);
   res.status(result.valid ? 200 : 422).json({ success: result.valid, data: result });
 });
 

@@ -112,6 +112,27 @@ export async function getActiveConnection(userId: string, broker: BrokerName) {
 }
 
 /**
+ * Records whether this connection's broker plan currently covers live/
+ * historical market data, so the frontend header can show a "purchase the
+ * data plan" notice without re-hitting the broker on every page load.
+ * Stored in `meta` (rather than a dedicated column) since it's a soft,
+ * best-effort signal we're happy to get from any market-data call, not a
+ * value with its own lifecycle worth migrating a column for.
+ */
+async function recordDataPlanStatus(connectionId: string, ok: boolean): Promise<void> {
+  try {
+    const connection = await BrokerConnection.findByPk(connectionId);
+    if (!connection) return;
+    await connection.update({
+      meta: { ...(connection.meta ?? {}), dataPlanOk: ok, dataPlanCheckedAt: new Date().toISOString() },
+    });
+  } catch {
+    // Best-effort only — never let a bookkeeping failure break the actual
+    // market-data call this was piggybacking on.
+  }
+}
+
+/**
  * Fetches real OHLCV candles from the given broker for the given instrument —
  * the single entry point the chart preview and the backtest engine both use,
  * so there is exactly one code path that talks to a broker for historical data.
@@ -123,5 +144,36 @@ export async function getHistoricalCandles(
 ): Promise<Candle[]> {
   const connection = await getActiveConnection(userId, broker);
   const adapter = buildBrokerAdapter(connection);
-  return adapter.getHistoricalData(params);
+  try {
+    const candles = await adapter.getHistoricalData(params);
+    void recordDataPlanStatus(connection.id, true);
+    return candles;
+  } catch (err) {
+    if (err instanceof ApiError && err.errorCode === 'DATA_PLAN_REQUIRED') {
+      void recordDataPlanStatus(connection.id, false);
+      throw ApiError.forbidden(err.message);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Live LTP/OHLC for one instrument — used by the chart header and anywhere
+ * else that needs a one-off quote outside a live feed session. Same
+ * plan-required bookkeeping as `getHistoricalCandles`.
+ */
+export async function getQuote(userId: string, broker: BrokerName, tradingSymbol: string) {
+  const connection = await getActiveConnection(userId, broker);
+  const adapter = buildBrokerAdapter(connection);
+  try {
+    const quote = await adapter.getQuote(tradingSymbol);
+    void recordDataPlanStatus(connection.id, true);
+    return quote;
+  } catch (err) {
+    if (err instanceof ApiError && err.errorCode === 'DATA_PLAN_REQUIRED') {
+      void recordDataPlanStatus(connection.id, false);
+      throw ApiError.forbidden(err.message);
+    }
+    throw err;
+  }
 }

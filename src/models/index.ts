@@ -9,3 +9,5 @@ export { AuditLog } from './auditLog.model';
 export { RefreshToken } from './refreshToken.model';
 export { Strategy } from './strategy.model';
 export { StrategyVersion } from './strategyVersion.model';
+export { StrategyRuntimeState } from './strategyRuntimeState.model';
+export { StrategyTrade } from './strategyTrade.model';

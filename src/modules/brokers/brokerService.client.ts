@@ -51,11 +51,21 @@ async function brokerRequest<T>(path: string, init: RequestInit = {}): Promise<T
   }
 
   if (!response.ok) {
-    const detail = (json as { detail?: string } | undefined)?.detail;
+    // FastAPI's `detail` is either a plain string (ordinary errors) or, for
+    // errors we've classified broker-side (see trading.py's
+    // `_catch_broker_errors`), `{ errorCode, message }` — pull errorCode out
+    // when present so callers can branch on it (e.g. DATA_PLAN_REQUIRED)
+    // instead of pattern-matching the human-readable message text.
+    const detail = (json as { detail?: string | { errorCode?: string; message?: string } } | undefined)?.detail;
+    const detailIsObject = typeof detail === 'object' && detail !== null;
+    const errorCode = detailIsObject ? detail.errorCode : undefined;
+    const detailMessage = detailIsObject ? detail.message : detail;
     throw new ApiError(
       response.status >= 500 ? 502 : 400,
-      `Broker service error (${response.status}): ${detail ?? response.statusText}`,
+      `Broker service error (${response.status}): ${detailMessage ?? response.statusText}`,
       json,
+      true,
+      errorCode,
     );
   }
 

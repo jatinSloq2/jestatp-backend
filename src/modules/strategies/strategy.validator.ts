@@ -1,6 +1,7 @@
 import { ApiError } from '../../utils/ApiError';
 import { INDICATOR_PARAM_SPECS, IndicatorName } from './dsl/constants';
 import { Condition, ConditionOperand, IndicatorRef, StrategyDefinition } from './dsl/types';
+import { validateStrategyCode } from './sandbox/sandboxService.client';
 
 /** Tokens that should never appear in a "custom formula" string, even though the Joi character whitelist already blocks most injection surface. */
 const FORMULA_BLOCKLIST = ['process', 'require', 'import', 'eval', '__proto__', 'constructor', 'global', 'module'];
@@ -162,5 +163,31 @@ export function assertValidStrategyDefinition(definition: StrategyDefinition): v
   const result = validateStrategyDefinition(definition);
   if (!result.valid) {
     throw ApiError.badRequest('Strategy definition failed validation', result.issues);
+  }
+}
+
+/**
+ * Python-strategy equivalent of assertValidStrategyDefinition: hands the
+ * code to jestatp-sandbox-service's /validate (compiles it and runs
+ * on_bar() once against a synthetic bar, inside the same sandbox real
+ * execution uses) and throws a 400 with the sandbox's error message if it
+ * doesn't even pass that smoke test. Catches risk config issues the same
+ * way the DSL path does — risk config is shared between both languages.
+ */
+export async function assertValidPythonStrategy(pythonCode: string, risk: StrategyDefinition['risk']): Promise<void> {
+  if (risk.maxLossPerDay > risk.capitalAllocated) {
+    throw ApiError.badRequest('Strategy definition failed validation', [
+      { path: 'risk.maxLossPerDay', message: 'maxLossPerDay cannot exceed capitalAllocated' },
+    ]);
+  }
+  if (risk.stopLoss.type === 'percent' && risk.stopLoss.value >= 100) {
+    throw ApiError.badRequest('Strategy definition failed validation', [
+      { path: 'risk.stopLoss.value', message: 'Percent-based stop loss must be under 100%' },
+    ]);
+  }
+
+  const result = await validateStrategyCode(pythonCode);
+  if (!result.ok) {
+    throw ApiError.badRequest('Strategy code failed validation', [{ path: 'pythonCode', message: result.error ?? 'Unknown error' }]);
   }
 }

@@ -198,16 +198,24 @@ export const strategyDefinitionSchema = Joi.object({
   timeframe: Joi.string()
     .valid(...TIMEFRAMES)
     .required(),
+  broker: Joi.string().valid('dhan', 'zerodha', 'groww').required(),
   executionMode: Joi.string().valid('paper', 'live').optional(),
-  entry: conditionBlock.required(),
-  exit: conditionBlock.required(),
+  language: Joi.string().valid('dsl', 'python').default('dsl'),
+  // Whether entry/exit vs. pythonCode is actually required depends on
+  // `language`, and that rule needs to behave differently for POST (full
+  // payload) vs PATCH (partial update, see strategyUpdateSchema below) — so
+  // it's enforced once, uniformly, in strategy.service.ts rather than here.
+  // Postgres's chk_strategies_language_payload CHECK is the final backstop.
+  entry: conditionBlock.optional(),
+  exit: conditionBlock.optional(),
+  pythonCode: Joi.string().min(1).max(20_000).optional(),
   risk: riskConfigSchema.required(),
   changeNote: Joi.string().max(255).allow('', null).optional(),
 });
 
 /** Same shape but every field optional — used for PATCH (partial update). */
 export const strategyUpdateSchema = strategyDefinitionSchema.fork(
-  ['name', 'instrument', 'exchange', 'timeframe', 'entry', 'exit', 'risk'],
+  ['name', 'instrument', 'exchange', 'timeframe', 'broker', 'risk'],
   (s) => s.optional(),
 );
 

@@ -2,12 +2,20 @@ export class ApiError extends Error {
   public statusCode: number;
   public isOperational: boolean;
   public details?: unknown;
+  /**
+   * Stable machine-readable code for errors the caller may want to branch on
+   * (e.g. "DATA_PLAN_REQUIRED" bubbled up from jestatp-broker-service),
+   * independent of the human-readable `message`. Undefined for ordinary
+   * ApiErrors, which callers should keep handling via statusCode/message.
+   */
+  public errorCode?: string;
 
-  constructor(statusCode: number, message: string, details?: unknown, isOperational = true) {
+  constructor(statusCode: number, message: string, details?: unknown, isOperational = true, errorCode?: string) {
     super(message);
     this.statusCode = statusCode;
     this.isOperational = isOperational;
     this.details = details;
+    this.errorCode = errorCode;
     Object.setPrototypeOf(this, ApiError.prototype);
     Error.captureStackTrace(this, this.constructor);
   }

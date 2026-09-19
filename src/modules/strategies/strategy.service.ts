@@ -1,9 +1,11 @@
 import { sequelize, Strategy, StrategyVersion, AuditLog } from '../../models';
+import { StrategyLanguage } from '../../models/strategy.model';
+import { BrokerName } from '../../models/brokerConnection.model';
 import { ApiError } from '../../utils/ApiError';
 import { PaginationParams, buildPaginationMeta } from '../../utils/pagination';
 import { StrategyStatus } from './dsl/constants';
 import { StrategyDefinition } from './dsl/types';
-import { assertValidStrategyDefinition } from './strategy.validator';
+import { assertValidPythonStrategy, assertValidStrategyDefinition } from './strategy.validator';
 
 export interface StrategyInput {
   name: string;
@@ -12,9 +14,13 @@ export interface StrategyInput {
   exchange: string;
   segment?: 'equity' | 'fno' | 'currency' | 'commodity';
   timeframe: StrategyDefinition['timeframe'];
+  broker: BrokerName;
   executionMode?: 'paper' | 'live';
-  entry: StrategyDefinition['entry'];
-  exit: StrategyDefinition['exit'];
+  language?: StrategyLanguage;
+  // DSL strategies: both required. Python strategies: pythonCode required instead. See assertLanguagePayload.
+  entry?: StrategyDefinition['entry'];
+  exit?: StrategyDefinition['exit'];
+  pythonCode?: string;
   risk: StrategyDefinition['risk'];
   changeNote?: string | null;
 }
@@ -24,10 +30,37 @@ function toDefinition(input: Pick<StrategyInput, 'instrument' | 'exchange' | 'ti
     instrument: input.instrument,
     exchange: input.exchange,
     timeframe: input.timeframe,
-    entry: input.entry,
-    exit: input.exit,
+    entry: input.entry as StrategyDefinition['entry'],
+    exit: input.exit as StrategyDefinition['exit'],
     risk: input.risk,
   };
+}
+
+/**
+ * The one place that decides "does this payload actually match its
+ * declared language" and runs the matching validator — Joi already checked
+ * shape, this checks the DSL-vs-Python invariant Postgres's
+ * chk_strategies_language_payload CHECK also enforces as a final backstop.
+ */
+async function assertLanguagePayload(input: Pick<StrategyInput, 'language' | 'entry' | 'exit' | 'pythonCode' | 'risk' | 'instrument' | 'exchange' | 'timeframe'>): Promise<void> {
+  const language = input.language ?? 'dsl';
+  if (language === 'python') {
+    if (!input.pythonCode) {
+      throw ApiError.badRequest('pythonCode is required for a python-language strategy');
+    }
+    if (input.entry || input.exit) {
+      throw ApiError.badRequest('entry/exit conditions are not used by a python-language strategy — remove them or set language to "dsl"');
+    }
+    await assertValidPythonStrategy(input.pythonCode, input.risk);
+  } else {
+    if (!input.entry || !input.exit) {
+      throw ApiError.badRequest('entry and exit conditions are required for a dsl-language strategy');
+    }
+    if (input.pythonCode) {
+      throw ApiError.badRequest('pythonCode is not used by a dsl-language strategy — remove it or set language to "python"');
+    }
+    assertValidStrategyDefinition(toDefinition(input));
+  }
 }
 
 async function getOwnedStrategy(userId: string, strategyId: string): Promise<Strategy> {
@@ -38,12 +71,14 @@ async function getOwnedStrategy(userId: string, strategyId: string): Promise<Str
 
 /**
  * Creates a new strategy in `draft` status. Runs the full pipeline's
- * "Strategy Validator" stage before anything is persisted, and snapshots
- * version 1 into strategy_versions in the same transaction as the strategy
- * row itself.
+ * "Strategy Validator" stage before anything is persisted (DSL: the
+ * condition-block validator; Python: a real compile-and-run smoke test
+ * against jestatp-sandbox-service), and snapshots version 1 into
+ * strategy_versions in the same transaction as the strategy row itself.
  */
 export async function createStrategy(userId: string, input: StrategyInput) {
-  assertValidStrategyDefinition(toDefinition(input));
+  const language = input.language ?? 'dsl';
+  await assertLanguagePayload(input);
 
   return sequelize.transaction(async (t) => {
     const strategy = await Strategy.create(
@@ -55,11 +90,14 @@ export async function createStrategy(userId: string, input: StrategyInput) {
         exchange: input.exchange,
         segment: input.segment ?? 'equity',
         timeframe: input.timeframe,
+        broker: input.broker,
         executionMode: input.executionMode ?? 'paper',
         status: 'draft',
         currentVersion: 1,
-        entryConditions: input.entry,
-        exitConditions: input.exit,
+        language,
+        entryConditions: input.entry ?? null,
+        exitConditions: input.exit ?? null,
+        pythonCode: input.pythonCode ?? null,
         riskConfig: input.risk,
         lastValidatedAt: new Date(),
       },
@@ -71,8 +109,10 @@ export async function createStrategy(userId: string, input: StrategyInput) {
         strategyId: strategy.id,
         version: 1,
         name: strategy.name,
-        entryConditions: input.entry,
-        exitConditions: input.exit,
+        language,
+        entryConditions: input.entry ?? null,
+        exitConditions: input.exit ?? null,
+        pythonCode: input.pythonCode ?? null,
         riskConfig: input.risk,
         changeNote: input.changeNote ?? 'Initial version',
         createdBy: userId,
@@ -125,6 +165,7 @@ export async function updateStrategy(userId: string, strategyId: string, input: 
     throw ApiError.badRequest('Pause the strategy before editing its definition');
   }
 
+  const language = input.language ?? strategy.language;
   const merged: StrategyInput = {
     name: input.name ?? strategy.name,
     description: input.description !== undefined ? input.description : strategy.description,
@@ -132,14 +173,20 @@ export async function updateStrategy(userId: string, strategyId: string, input: 
     exchange: input.exchange ?? strategy.exchange,
     segment: input.segment ?? strategy.segment,
     timeframe: input.timeframe ?? strategy.timeframe,
+    broker: input.broker ?? strategy.broker,
     executionMode: input.executionMode ?? strategy.executionMode,
-    entry: input.entry ?? strategy.entryConditions,
-    exit: input.exit ?? strategy.exitConditions,
+    language,
+    // When switching language, don't silently carry over the other
+    // language's fields — the caller must supply the new language's
+    // payload fresh (mirrors what assertLanguagePayload requires anyway).
+    entry: language === 'python' ? undefined : (input.entry ?? strategy.entryConditions ?? undefined),
+    exit: language === 'python' ? undefined : (input.exit ?? strategy.exitConditions ?? undefined),
+    pythonCode: language === 'dsl' ? undefined : (input.pythonCode ?? strategy.pythonCode ?? undefined),
     risk: input.risk ?? strategy.riskConfig,
     changeNote: input.changeNote ?? null,
   };
 
-  assertValidStrategyDefinition(toDefinition(merged));
+  await assertLanguagePayload(merged);
 
   return sequelize.transaction(async (t) => {
     const nextVersion = strategy.currentVersion + 1;
@@ -152,9 +199,12 @@ export async function updateStrategy(userId: string, strategyId: string, input: 
         exchange: merged.exchange,
         segment: merged.segment,
         timeframe: merged.timeframe,
+        broker: merged.broker,
         executionMode: merged.executionMode,
-        entryConditions: merged.entry,
-        exitConditions: merged.exit,
+        language,
+        entryConditions: merged.entry ?? null,
+        exitConditions: merged.exit ?? null,
+        pythonCode: merged.pythonCode ?? null,
         riskConfig: merged.risk,
         currentVersion: nextVersion,
         lastValidatedAt: new Date(),
@@ -167,8 +217,10 @@ export async function updateStrategy(userId: string, strategyId: string, input: 
         strategyId: strategy.id,
         version: nextVersion,
         name: merged.name,
-        entryConditions: merged.entry,
-        exitConditions: merged.exit,
+        language,
+        entryConditions: merged.entry ?? null,
+        exitConditions: merged.exit ?? null,
+        pythonCode: merged.pythonCode ?? null,
         riskConfig: merged.risk,
         changeNote: merged.changeNote,
         createdBy: userId,
@@ -191,7 +243,11 @@ export async function activateStrategy(userId: string, strategyId: string) {
 
   // Re-run the validator against the live definition before flipping it on —
   // guards against stale/corrupted rows and gives a fresh lastValidatedAt.
-  assertValidStrategyDefinition(strategy.toStrategyDefinition());
+  if (strategy.language === 'python') {
+    await assertValidPythonStrategy(strategy.pythonCode!, strategy.riskConfig);
+  } else {
+    assertValidStrategyDefinition(strategy.toStrategyDefinition());
+  }
 
   await sequelize.transaction(async (t) => {
     await strategy.update({ status: 'active', lastValidatedAt: new Date() }, { transaction: t });
@@ -240,9 +296,12 @@ export async function duplicateStrategy(userId: string, strategyId: string) {
     exchange: source.exchange,
     segment: source.segment,
     timeframe: source.timeframe,
+    broker: source.broker,
     executionMode: 'paper', // duplicates always start in paper mode as a safety default
-    entry: source.entryConditions,
-    exit: source.exitConditions,
+    language: source.language,
+    entry: source.entryConditions ?? undefined,
+    exit: source.exitConditions ?? undefined,
+    pythonCode: source.pythonCode ?? undefined,
     risk: source.riskConfig,
     changeNote: `Duplicated from "${source.name}" (v${source.currentVersion})`,
   });
@@ -261,14 +320,18 @@ export async function getVersion(userId: string, strategyId: string, version: nu
 }
 
 /** Dry-run validation for the builder UI — same rules as create/update, but nothing is persisted. */
-export function validateDefinitionOnly(input: Pick<StrategyInput, 'instrument' | 'exchange' | 'timeframe' | 'entry' | 'exit' | 'risk'>) {
-  const definition = toDefinition(input);
+export async function validateDefinitionOnly(
+  input: Pick<StrategyInput, 'instrument' | 'exchange' | 'timeframe' | 'entry' | 'exit' | 'risk' | 'language' | 'pythonCode'>,
+) {
   try {
-    assertValidStrategyDefinition(definition);
+    await assertLanguagePayload(input);
     return { valid: true, issues: [] as { path: string; message: string }[] };
   } catch (err) {
     if (err instanceof ApiError && Array.isArray(err.details)) {
       return { valid: false, issues: err.details as { path: string; message: string }[] };
+    }
+    if (err instanceof ApiError) {
+      return { valid: false, issues: [{ path: 'pythonCode', message: err.message }] };
     }
     throw err;
   }

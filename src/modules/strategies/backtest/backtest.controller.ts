@@ -4,9 +4,9 @@ import { ApiError } from '../../../utils/ApiError';
 import { AuthenticatedRequest } from '../../../middlewares/auth.middleware';
 import { BrokerName } from '../../../models/brokerConnection.model';
 import { getStrategy } from '../strategy.service';
-import { StrategyDefinition } from '../dsl/types';
 import { getHistoricalCandles } from '../../brokers/broker.service';
 import { runBacktest } from './backtestEngine';
+import { runPythonBacktest } from './pythonBacktestEngine';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const INTRADAY_TIMEFRAMES = new Set(['1m', '3m', '5m', '15m', '30m', '1h']);
@@ -43,7 +43,7 @@ function resolveDateRange(timeframe: string, fromInput?: string, toInput?: strin
  */
 export const runBacktestHandler = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const strategy = await getStrategy(req.user!.id, req.params.id);
-  const broker = req.body.broker as BrokerName;
+  const broker = (req.body.broker as BrokerName | undefined) ?? strategy.broker;
   const { from, to } = resolveDateRange(strategy.timeframe, req.body.from, req.body.to);
 
   const candles = await getHistoricalCandles(req.user!.id, broker, {
@@ -61,7 +61,10 @@ export const runBacktestHandler = asyncHandler(async (req: AuthenticatedRequest,
     );
   }
 
-  const result = runBacktest(strategy.toStrategyDefinition(), candles);
+  const result =
+    strategy.language === 'python'
+      ? await runPythonBacktest(strategy.pythonCode!, strategy.toStrategyDefinition(), candles, req.body.params ?? {}, req.body.warmup ?? 20)
+      : runBacktest(strategy.toStrategyDefinition(), candles);
 
   res.json({
     success: true,
@@ -87,40 +90,47 @@ export const runBacktestHandler = asyncHandler(async (req: AuthenticatedRequest,
  */
 export const previewBacktestHandler = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
   const broker = req.body.broker as BrokerName;
-  const definition: StrategyDefinition = {
-    instrument: req.body.instrument,
-    exchange: req.body.exchange,
-    timeframe: req.body.timeframe,
-    entry: req.body.entry,
-    exit: req.body.exit,
-    risk: req.body.risk,
-  };
-  const { from, to } = resolveDateRange(definition.timeframe, req.body.from, req.body.to);
+  const language: 'dsl' | 'python' = req.body.language ?? 'dsl';
+  const timeframe = req.body.timeframe;
+  const { from, to } = resolveDateRange(timeframe, req.body.from, req.body.to);
 
   const candles = await getHistoricalCandles(req.user!.id, broker, {
-    tradingSymbol: definition.instrument,
-    exchange: definition.exchange,
+    tradingSymbol: req.body.instrument,
+    exchange: req.body.exchange,
     segment: req.body.segment,
-    timeframe: definition.timeframe,
+    timeframe,
     from,
     to,
   });
 
   if (candles.length < 5) {
     throw ApiError.badRequest(
-      `Not enough historical data returned for ${definition.instrument} on ${definition.exchange} (${definition.timeframe}) in this date range.`,
+      `Not enough historical data returned for ${req.body.instrument} on ${req.body.exchange} (${timeframe}) in this date range.`,
     );
   }
 
-  const result = runBacktest(definition, candles);
+  const result =
+    language === 'python'
+      ? await runPythonBacktest(req.body.pythonCode, { risk: req.body.risk }, candles, req.body.params ?? {}, req.body.warmup ?? 20)
+      : runBacktest(
+          {
+            instrument: req.body.instrument,
+            exchange: req.body.exchange,
+            timeframe,
+            entry: req.body.entry,
+            exit: req.body.exit,
+            risk: req.body.risk,
+          },
+          candles,
+        );
 
   res.json({
     success: true,
     data: {
       broker,
-      timeframe: definition.timeframe,
-      instrument: definition.instrument,
-      exchange: definition.exchange,
+      timeframe,
+      instrument: req.body.instrument,
+      exchange: req.body.exchange,
       from: from.toISOString(),
       to: to.toISOString(),
       ...result,
