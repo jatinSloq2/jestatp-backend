@@ -3,6 +3,7 @@ import { asyncHandler } from '../../utils/asyncHandler';
 import { AuthenticatedRequest } from '../../middlewares/auth.middleware';
 import { parsePagination } from '../../utils/pagination';
 import * as strategyService from './strategy.service';
+import { getStrategyActivity } from './strategyActivity.service';
 import { StrategyStatus } from './dsl/constants';
 import { INDICATOR_NAMES, INDICATOR_PARAM_SPECS, CANDLE_PATTERNS, MARKET_CONDITIONS, ALL_OPERATORS, BREAKOUT_LEVELS, TIMEFRAMES, POSITION_SIZING_METHODS, STOP_LOSS_TARGET_TYPES } from './dsl/constants';
 
@@ -78,4 +79,10 @@ export const getIndicatorCatalogHandler = asyncHandler(async (_req: Authenticate
       stopLossTargetTypes: STOP_LOSS_TARGET_TYPES,
     },
   });
+});
+
+export const getStrategyActivityHandler = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const pagination = parsePagination(req.query);
+  const activity = await getStrategyActivity(req.user!.id, req.params.id, pagination);
+  res.json({ success: true, data: activity });
 });

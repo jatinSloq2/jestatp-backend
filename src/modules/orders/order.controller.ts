@@ -14,3 +14,9 @@ export const listOrdersHandler = asyncHandler(async (req: AuthenticatedRequest, 
   const { rows, meta, lastSyncedAt } = await orderService.getOrders(req.user!.id, broker, pagination, segment);
   res.json({ success: true, data: rows, meta: { ...meta, lastSyncedAt } });
 });
+
+export const placeOrderHandler = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const { broker, segment, ...request } = req.body;
+  const order = await orderService.placeManualOrder(req.user!.id, broker, segment, request);
+  res.status(201).json({ success: true, data: order });
+});

@@ -9,6 +9,7 @@ import {
   createStrategyHandler,
   duplicateStrategyHandler,
   getIndicatorCatalogHandler,
+  getStrategyActivityHandler,
   getStrategyHandler,
   getVersionHandler,
   listStrategiesHandler,
@@ -451,6 +452,35 @@ router.get('/:id/versions', validate(idParamSchema, 'params'), listVersionsHandl
  *       404: { description: Version not found }
  */
 router.get('/:id/versions/:version', validate(versionParamSchema, 'params'), getVersionHandler);
+
+/**
+ * @openapi
+ * /strategies/{id}/activity:
+ *   get:
+ *     tags: [Strategies]
+ *     summary: Live/paper execution activity for this strategy — current position, trade history, summary P&L
+ *     description: >
+ *       Reads liveEngine.ts's persisted runtime state (is the strategy currently holding a
+ *       position right now, per the last execution tick) plus its full StrategyTrade history.
+ *       Summary stats (win rate, total P&L, best/worst trade) are computed across ALL closed
+ *       trades regardless of the page requested — only the `trades` list itself is paginated.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, minimum: 1, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+ *     responses:
+ *       200: { description: Runtime status + trade history + summary }
+ *       404: { description: Not found }
+ */
+router.get('/:id/activity', validate(idParamSchema, 'params'), getStrategyActivityHandler);
 
 /**
  * @openapi

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import Joi from 'joi';
 import { requireAuth } from '../../middlewares/auth.middleware';
 import { validate } from '../../middlewares/validate.middleware';
-import { listOrdersHandler } from './order.controller';
+import { listOrdersHandler, placeOrderHandler } from './order.controller';
 
 const router = Router();
 router.use(requireAuth);
@@ -12,6 +12,21 @@ const listOrdersQuerySchema = Joi.object({
   segment: Joi.string().valid('equity', 'fno', 'currency', 'commodity').optional(),
   page: Joi.number().integer().min(1).optional(),
   limit: Joi.number().integer().min(1).max(100).optional(),
+});
+
+const placeOrderSchema = Joi.object({
+  broker: Joi.string().valid('dhan', 'zerodha', 'groww').required(),
+  segment: Joi.string().valid('equity', 'fno', 'currency', 'commodity').required(),
+  tradingSymbol: Joi.string().min(1).max(60).required(),
+  exchange: Joi.string().min(1).max(10).uppercase().required(),
+  side: Joi.string().valid('BUY', 'SELL').required(),
+  orderType: Joi.string().valid('MARKET', 'LIMIT', 'SL', 'SL-M').required(),
+  productType: Joi.string().valid('CNC', 'MIS', 'NRML').required(),
+  quantity: Joi.number().integer().min(1).required(),
+  price: Joi.number().positive().when('orderType', { is: Joi.valid('LIMIT', 'SL'), then: Joi.required(), otherwise: Joi.optional() }),
+  triggerPrice: Joi.number()
+    .positive()
+    .when('orderType', { is: Joi.valid('SL', 'SL-M'), then: Joi.required(), otherwise: Joi.optional() }),
 });
 
 /**
@@ -102,5 +117,50 @@ const listOrdersQuerySchema = Joi.object({
  *       400: { description: No active broker connection }
  */
 router.get('/', validate(listOrdersQuerySchema, 'query'), listOrdersHandler);
+
+/**
+ * @openapi
+ * /orders:
+ *   post:
+ *     tags: [Orders]
+ *     summary: Place a real order with the broker
+ *     description: >
+ *       Places a one-off manual order — the same underlying path liveEngine.ts uses for
+ *       automated strategy orders (orderPlacement.service.ts), so it gets identical
+ *       tracking and reconciliation. Creates an Order row before the broker call goes out;
+ *       if the broker rejects it, that row is still visible via GET /orders (status REJECTED)
+ *       even though this endpoint itself returns 400.
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [broker, segment, tradingSymbol, exchange, side, orderType, productType, quantity]
+ *             properties:
+ *               broker: { type: string, enum: [dhan, zerodha, groww] }
+ *               segment: { type: string, enum: [equity, fno, currency, commodity] }
+ *               tradingSymbol: { type: string }
+ *               exchange: { type: string }
+ *               side: { type: string, enum: [BUY, SELL] }
+ *               orderType: { type: string, enum: [MARKET, LIMIT, SL, SL-M] }
+ *               productType: { type: string, enum: [CNC, MIS, NRML] }
+ *               quantity: { type: integer, minimum: 1 }
+ *               price: { type: number, description: Required for LIMIT/SL orders }
+ *               triggerPrice: { type: number, description: Required for SL/SL-M orders }
+ *     responses:
+ *       201:
+ *         description: Order accepted by the broker
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data: { $ref: '#/components/schemas/OrderRecord' }
+ *       400: { description: No active broker connection, or the broker rejected the order }
+ */
+router.post('/', validate(placeOrderSchema, 'body'), placeOrderHandler);
 
 export default router;
