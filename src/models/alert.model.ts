@@ -11,7 +11,8 @@ export type AlertType =
   | 'live_entry_failed'
   | 'live_exit_failed'
   | 'strategy_execution_error'
-  | 'manual_order_rejected';
+  | 'manual_order_rejected'
+  | 'broker_session_expired';
 
 export interface AlertAttributes {
   id: string;

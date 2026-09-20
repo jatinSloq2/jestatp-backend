@@ -7,12 +7,14 @@ import {
   connectGrowwSchema,
   connectZerodhaCallbackSchema,
   connectZerodhaInitSchema,
+  quoteQuerySchema,
 } from './broker.validation';
 import {
   connectDhanHandler,
   connectGrowwHandler,
   connectZerodhaHandler,
   disconnectBrokerHandler,
+  getQuoteHandler,
   listMyConnectionsHandler,
   listSupportedBrokersHandler,
   syncBrokerHandler,
@@ -215,5 +217,38 @@ router.delete('/:broker', validate(brokerParamSchema, 'params'), disconnectBroke
  *       400: { description: No active connection for this broker }
  */
 router.post('/:broker/sync', validate(brokerParamSchema, 'params'), syncBrokerHandler);
+
+/**
+ * @openapi
+ * /brokers/{broker}/quote:
+ *   get:
+ *     tags: [Brokers]
+ *     summary: One-off live LTP/OHLC for a single symbol
+ *     description: >
+ *       Used by the header's index ticker and anywhere else that needs a single quote
+ *       outside a live feed session. Same data-plan-required / session-expired handling as
+ *       backtests — a 403 means the broker plan doesn't cover live pricing (see the header's
+ *       data-plan banner), a 400 with "session has expired" means reconnecting is needed.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: broker
+ *         required: true
+ *         schema: { type: string, enum: [dhan, zerodha, groww] }
+ *       - in: query
+ *         name: symbol
+ *         required: true
+ *         schema: { type: string }
+ *         example: "NIFTY 50"
+ *       - in: query
+ *         name: exchange
+ *         schema: { type: string }
+ *         example: NSE
+ *     responses:
+ *       200: { description: Live quote }
+ *       400: { description: No active connection, or session expired }
+ *       403: { description: Broker account isn't subscribed to the data plan needed for live pricing }
+ */
+router.get('/:broker/quote', validate(brokerParamSchema, 'params'), validate(quoteQuerySchema, 'query'), getQuoteHandler);
 
 export default router;

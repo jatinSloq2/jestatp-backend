@@ -1,7 +1,9 @@
 import { Order, BrokerConnection } from '../../models';
 import { OrderSegment } from '../../models/order.model';
+import { ApiError } from '../../utils/ApiError';
 import { buildBrokerAdapter } from '../brokers/adapters/brokerAdapter.factory';
 import { OrderRequest } from '../brokers/adapters/brokerAdapter.interface';
+import { markSessionExpired } from '../brokers/broker.service';
 import { mapBrokerStatus, normalizeProductType } from '../brokers/brokerSync.service';
 import { logger } from '../../utils/logger';
 
@@ -72,6 +74,14 @@ export async function placeOrder(
     logger.error(
       `Order ${orderRow.id} REJECTED by ${connection.broker}: ${request.side} ${request.quantity} ${request.tradingSymbol} — ${message}`,
     );
+    if (err instanceof ApiError && err.errorCode === 'SESSION_EXPIRED') {
+      // The order is already correctly recorded as REJECTED above — this
+      // additionally flips the connection itself so nothing else (another
+      // strategy, a manual order) keeps trying against a session we now
+      // know for certain is dead, instead of each one discovering it
+      // independently one rejected order at a time.
+      await markSessionExpired(connection);
+    }
   }
 
   return orderRow;

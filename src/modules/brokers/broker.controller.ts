@@ -54,3 +54,18 @@ export const syncBrokerHandler = asyncHandler(async (req: AuthenticatedRequest, 
     data: { jobId: job.id },
   });
 });
+
+/**
+ * One-off LTP/OHLC lookup — e.g. the header's index ticker (NIFTY 50,
+ * SENSEX, BANK NIFTY, USD/INR), or any other single-symbol "what's this
+ * trading at right now" need outside a live feed subscription. Just a thin
+ * wrapper over broker.service.ts's getQuote, which already owns the
+ * data-plan-required / session-expired bookkeeping shared with
+ * getHistoricalCandles.
+ */
+export const getQuoteHandler = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const broker = req.params.broker as BrokerName;
+  const { symbol, exchange } = req.query as { symbol: string; exchange?: string };
+  const quote = await brokerService.getQuote(req.user!.id, broker, symbol, exchange);
+  res.json({ success: true, data: quote });
+});

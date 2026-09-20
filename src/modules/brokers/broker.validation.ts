@@ -22,3 +22,8 @@ export const connectGrowwSchema = Joi.object({
 export const brokerParamSchema = Joi.object({
   broker: Joi.string().valid('dhan', 'zerodha', 'groww').required(),
 });
+
+export const quoteQuerySchema = Joi.object({
+  symbol: Joi.string().min(1).max(60).required(),
+  exchange: Joi.string().min(1).max(10).uppercase().optional(),
+});

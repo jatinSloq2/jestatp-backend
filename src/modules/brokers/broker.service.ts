@@ -5,6 +5,8 @@ import { encrypt } from '../../utils/crypto';
 import { buildAdapterForConnect, buildBrokerAdapter } from './adapters/brokerAdapter.factory';
 import { ZerodhaAdapter } from './adapters/zerodha.adapter';
 import { Candle, HistoricalDataParams } from './adapters/brokerAdapter.interface';
+import { computeTokenExpiry } from './tokenExpiry';
+import { raiseAlert } from '../alerts/alerting.service';
 
 export const SUPPORTED_BROKERS: { broker: BrokerName; name: string; authType: 'token' | 'oauth' }[] = [
   { broker: 'dhan', name: 'Dhan', authType: 'token' },
@@ -29,13 +31,27 @@ async function upsertConnectionWithAudit(
     accessTokenEncrypted: string;
   }>,
 ) {
+  const connectedAt = new Date();
   return sequelize.transaction(async (t) => {
     const [connection] = await BrokerConnection.findOrCreate({
       where: { userId, broker },
       defaults: { userId, broker, status: 'pending' },
       transaction: t,
     });
-    await connection.update({ ...fields, status: 'connected', lastSyncedAt: new Date() }, { transaction: t });
+    await connection.update(
+      {
+        ...fields,
+        status: 'connected',
+        lastSyncedAt: connectedAt,
+        // See tokenExpiry.ts for exactly what each broker's session lifetime
+        // actually is (verified against current docs, not assumed) — this is
+        // the proactive half of expiry handling; getActiveConnection below
+        // is the reactive half (catches the broker's own "expired" error in
+        // case this estimate is ever wrong).
+        tokenExpiresAt: computeTokenExpiry(broker, connectedAt),
+      },
+      { transaction: t },
+    );
     await AuditLog.create(
       { userId, action: 'broker.connect', entityType: 'broker_connection', entityId: connection.id, metadata: { broker } },
       { transaction: t },
@@ -103,12 +119,54 @@ export async function disconnectBroker(userId: string, broker: BrokerName) {
   return connection;
 }
 
+/**
+ * The single choke point every broker-facing call goes through
+ * (backtests, live/paper strategy execution, manual order placement,
+ * quotes) — which makes it the right place to enforce session expiry
+ * rather than scattering the check across every caller.
+ *
+ * Two layers, deliberately: a `connected` row whose `tokenExpiresAt` has
+ * already passed is caught HERE, proactively, before wasting an API call
+ * on a token we already know is dead (see tokenExpiry.ts for how that's
+ * computed per broker). But since that's an estimate, the broker's own
+ * "session expired" error is also caught reactively wherever a broker call
+ * actually happens (getHistoricalCandles, getQuote, orderPlacement.service.ts)
+ * via markSessionExpired below — so a wrong estimate never leaves the
+ * connection silently marked "connected" while every real call fails.
+ */
 export async function getActiveConnection(userId: string, broker: BrokerName) {
   const connection = await BrokerConnection.findOne({ where: { userId, broker, status: 'connected' } });
   if (!connection) {
     throw ApiError.badRequest(`No active ${broker} connection. Please connect your ${broker} account first.`);
   }
+
+  if (connection.tokenExpiresAt && connection.tokenExpiresAt.getTime() <= Date.now()) {
+    await markSessionExpired(connection);
+    throw ApiError.badRequest(
+      `Your ${broker} session has expired. ${broker} sessions don't last forever — please reconnect your account to continue.`,
+    );
+  }
+
   return connection;
+}
+
+/**
+ * Flips a connection to `expired` and tells the user — both a DB-recorded
+ * alert (shows in the bell/`/alerts`) and, for anyone actively trading live
+ * through this connection, an immediate email, since a strategy that can no
+ * longer place live orders because of a dead session needs attention now,
+ * not next time someone happens to check the dashboard.
+ */
+export async function markSessionExpired(connection: BrokerConnection): Promise<void> {
+  if (connection.status === 'expired') return; // already recorded, avoid duplicate alerts on repeated calls
+  await connection.update({ status: 'expired' });
+  await raiseAlert({
+    userId: connection.userId,
+    severity: 'warning',
+    type: 'broker_session_expired',
+    message: `Your ${connection.broker} session has expired and needs to be reconnected before trading can continue.`,
+    metadata: { broker: connection.broker, connectionId: connection.id },
+  });
 }
 
 /**
@@ -153,6 +211,10 @@ export async function getHistoricalCandles(
       void recordDataPlanStatus(connection.id, false);
       throw ApiError.forbidden(err.message);
     }
+    if (err instanceof ApiError && err.errorCode === 'SESSION_EXPIRED') {
+      await markSessionExpired(connection);
+      throw ApiError.badRequest(`Your ${broker} session has expired — please reconnect your account.`);
+    }
     throw err;
   }
 }
@@ -162,17 +224,21 @@ export async function getHistoricalCandles(
  * else that needs a one-off quote outside a live feed session. Same
  * plan-required bookkeeping as `getHistoricalCandles`.
  */
-export async function getQuote(userId: string, broker: BrokerName, tradingSymbol: string) {
+export async function getQuote(userId: string, broker: BrokerName, tradingSymbol: string, exchange?: string) {
   const connection = await getActiveConnection(userId, broker);
   const adapter = buildBrokerAdapter(connection);
   try {
-    const quote = await adapter.getQuote(tradingSymbol);
+    const quote = await adapter.getQuote(tradingSymbol, exchange);
     void recordDataPlanStatus(connection.id, true);
     return quote;
   } catch (err) {
     if (err instanceof ApiError && err.errorCode === 'DATA_PLAN_REQUIRED') {
       void recordDataPlanStatus(connection.id, false);
       throw ApiError.forbidden(err.message);
+    }
+    if (err instanceof ApiError && err.errorCode === 'SESSION_EXPIRED') {
+      await markSessionExpired(connection);
+      throw ApiError.badRequest(`Your ${broker} session has expired — please reconnect your account.`);
     }
     throw err;
   }

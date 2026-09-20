@@ -1,6 +1,7 @@
 import { sequelize, Order, Position, Fund, Holding, BrokerConnection } from '../../models';
 import { OrderSegment } from '../../models/order.model';
 import { PositionSegment } from '../../models/position.model';
+import { ApiError } from '../../utils/ApiError';
 import { buildBrokerAdapter } from './adapters/brokerAdapter.factory';
 import { logger } from '../../utils/logger';
 
@@ -149,6 +150,21 @@ export async function syncConnectionFully(connection: BrokerConnection): Promise
   ]);
 
   const failures = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+
+  // If EVERY call failed specifically because the session is dead, that's
+  // not a transient error worth BullMQ retrying with backoff — it's a
+  // known, permanent state until the user reconnects. Mark it and stop,
+  // rather than throwing (which would otherwise retry a call that's
+  // guaranteed to fail identically every time).
+  const allSessionExpired =
+    failures.length === results.length &&
+    failures.every((f) => f.reason instanceof ApiError && f.reason.errorCode === 'SESSION_EXPIRED');
+  if (allSessionExpired) {
+    const { markSessionExpired } = await import('./broker.service');
+    await markSessionExpired(connection);
+    return;
+  }
+
   if (failures.length > 0) {
     logger.error(
       `Partial broker sync failure for connection ${connection.id} (${connection.broker}): ${failures

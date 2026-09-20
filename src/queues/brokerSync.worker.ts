@@ -3,6 +3,7 @@ import { createBullConnection } from '../config/redis';
 import { QUEUE_NAMES, JOB_NAMES } from './names';
 import { BrokerConnection } from '../models';
 import { syncConnectionFully } from '../modules/brokers/brokerSync.service';
+import { markSessionExpired } from '../modules/brokers/broker.service';
 import { enqueueConnectionSync, BrokerSyncJobData, SyncConnectionJobData } from './brokerSync.queue';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
@@ -13,6 +14,19 @@ async function processSyncConnection(data: SyncConnectionJobData) {
     logger.warn(`Skipping sync job for connection ${data.connectionId} — not found or not connected`);
     return;
   }
+
+  // Proactive half of session-expiry handling (see tokenExpiry.ts /
+  // broker.service.ts's getActiveConnection for the reactive half): catch
+  // an expired session here, on the regular sync schedule, rather than
+  // waiting for a user action or a live strategy tick to discover it —
+  // this is what makes the header banner / alert show up even if nobody's
+  // actively used the connection since it expired.
+  if (connection.tokenExpiresAt && connection.tokenExpiresAt.getTime() <= Date.now()) {
+    await markSessionExpired(connection);
+    logger.info(`Connection ${connection.id} (${connection.broker}) marked expired — skipping this sync cycle`);
+    return;
+  }
+
   await syncConnectionFully(connection);
   logger.info(`Synced ${connection.broker} connection ${connection.id} (user ${connection.userId})`);
 }

@@ -161,7 +161,7 @@ export interface BrokerAdapter {
   cancelOrder(orderId: string): Promise<OrderResponse>;
   getOrderStatus(orderId: string): Promise<OrderStatus>;
 
-  getQuote(symbol: string): Promise<Quote>;
+  getQuote(symbol: string, exchange?: string): Promise<Quote>;
 
   /** Historical OHLCV candles — the data source for chart previews and backtesting. */
   getHistoricalData(params: HistoricalDataParams): Promise<Candle[]>;

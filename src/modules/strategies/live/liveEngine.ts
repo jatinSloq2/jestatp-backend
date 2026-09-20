@@ -1,7 +1,7 @@
 import { Strategy, StrategyRuntimeState, StrategyTrade, BrokerConnection } from '../../../models';
 import { PersistedOpenPosition } from '../../../models/strategyRuntimeState.model';
 import { getHistoricalCandles } from '../../brokers/broker.service';
-import { OrderRequest } from '../../brokers/adapters/brokerAdapter.interface';
+import { OrderRequest, Candle } from '../../brokers/adapters/brokerAdapter.interface';
 import { placeOrder } from '../../orders/orderPlacement.service';
 import { raiseAlert } from '../../alerts/alerting.service';
 import { executeStrategy } from '../sandbox/sandboxService.client';
@@ -47,14 +47,25 @@ export async function runStrategyTick(strategy: Strategy): Promise<void> {
   const to = new Date();
   const from = new Date(to.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
 
-  const candles = await getHistoricalCandles(strategy.userId, strategy.broker, {
-    tradingSymbol: strategy.instrument,
-    exchange: strategy.exchange,
-    segment: strategy.segment,
-    timeframe: strategy.timeframe,
-    from,
-    to,
-  });
+  let candles: Candle[];
+  try {
+    candles = await getHistoricalCandles(strategy.userId, strategy.broker, {
+      tradingSymbol: strategy.instrument,
+      exchange: strategy.exchange,
+      segment: strategy.segment,
+      timeframe: strategy.timeframe,
+      from,
+      to,
+    });
+  } catch (err) {
+    // getActiveConnection (called inside getHistoricalCandles) already
+    // raises the "session expired" alert and flips the connection's status
+    // itself — this just stops the tick cleanly instead of letting an
+    // uncaught rejection fall through to BullMQ's retry/backoff, which
+    // would only fail identically against a session we already know is dead.
+    logger.warn(`Strategy ${strategy.id}: couldn't fetch candles this tick - ${(err as Error).message}`);
+    return;
+  }
 
   if (candles.length < 2) {
     logger.warn(`Strategy ${strategy.id}: not enough candles returned (${candles.length}) - skipping this tick`);
