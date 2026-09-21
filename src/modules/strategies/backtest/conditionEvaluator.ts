@@ -254,4 +254,90 @@ export class ConditionEvaluator {
     const results = conditions.map((c) => this.evaluate(c, i));
     return (logic ?? 'AND') === 'OR' ? results.some(Boolean) : results.every(Boolean);
   }
+
+  /**
+   * Same evaluation as `evaluate`, but building a human-readable trace
+   * instead of (well, alongside) just the boolean — this is what powers
+   * the per-trade debugger ("Conditions at Entry" in the design doc): for
+   * each leaf, what indicator/field value it actually saw on this bar and
+   * whether that leaf passed, so a trade can be explained rather than just
+   * shown. Deliberately a *separate* method from `evaluate`/`evaluateLeaf`
+   * — building description strings on every bar of a backtest would be
+   * wasted work, so this is only ever called once, at the single bar index
+   * a trade actually opened on (see backtestEngine.ts's `explainEntryAt`).
+   */
+  explain(condition: Condition, i: number): ConditionExplanation {
+    if (condition.type === 'group') {
+      const children = condition.conditions.map((c) => this.explain(c, i));
+      const result = condition.operator === 'OR' ? children.some((c) => c.result) : children.every((c) => c.result);
+      return { description: `${condition.operator} of ${children.length} condition${children.length === 1 ? '' : 's'}`, result, children };
+    }
+    return this.explainLeaf(condition, i);
+  }
+
+  explainBlock(conditions: Condition[], logic: 'AND' | 'OR' | undefined, i: number): ConditionExplanation {
+    const children = conditions.map((c) => this.explain(c, i));
+    const result = conditions.length > 0 && ((logic ?? 'AND') === 'OR' ? children.some((c) => c.result) : children.every((c) => c.result));
+    return { description: `${logic ?? 'AND'} of ${children.length} condition${children.length === 1 ? '' : 's'}`, result, children };
+  }
+
+  private describeOperator(operator: string): string {
+    const names: Record<string, string> = {
+      '>': '>', '<': '<', '>=': '≥', '<=': '≤', '==': '=', '!=': '≠',
+      cross_above: 'crosses above', cross_below: 'crosses below', between: 'between',
+    };
+    return names[operator] ?? operator;
+  }
+
+  private formatOperand(operand: ConditionOperand): string {
+    if (Array.isArray(operand)) return `[${operand[0]}, ${operand[1]}]`;
+    if (typeof operand === 'number') return String(operand);
+    return `${operand.indicator}${operand.params ? `(${Object.values(operand.params).join(', ')})` : ''}`;
+  }
+
+  private explainLeaf(condition: Condition, i: number): ConditionExplanation {
+    const result = this.evaluateLeaf(condition, i);
+
+    switch (condition.type) {
+      case 'indicator': {
+        const series = this.getIndicatorSeries({ indicator: condition.indicator, params: condition.params });
+        const value = series[i];
+        return {
+          description: `${condition.indicator}${condition.params ? `(${Object.values(condition.params).join(', ')})` : ''} ${this.describeOperator(condition.operator)} ${this.formatOperand(condition.value)}`,
+          result,
+          value: Number.isNaN(value) ? null : value,
+        };
+      }
+      case 'price_action': {
+        const value = this.candles[i][condition.field];
+        return { description: `${condition.field} ${this.describeOperator(condition.operator)} ${this.formatOperand(condition.value)}`, result, value };
+      }
+      case 'volume': {
+        const value = this.candles[i].volume;
+        const target = typeof condition.compareTo === 'number' ? condition.compareTo : `${condition.compareTo.period}-bar avg volume`;
+        return { description: `volume ${this.describeOperator(condition.operator)} ${target}`, result, value };
+      }
+      case 'candle_pattern':
+        return { description: `candle pattern: ${condition.pattern}`, result };
+      case 'breakout':
+        return { description: `breakout above/below ${condition.lookbackPeriod}-bar ${condition.level}`, result, value: this.candles[i].close };
+      case 'support_resistance':
+        return { description: `within ${condition.proximityPercent}% of ${condition.level}`, result, value: this.candles[i].close };
+      case 'time':
+        return { description: `time ${condition.operator} ${JSON.stringify(condition.value)}`, result, value: null };
+      case 'market_condition':
+        return { description: `market condition: ${condition.condition}`, result };
+      case 'custom_formula':
+        return { description: `custom formula: ${condition.formula}`, result };
+      default:
+        return { description: 'unknown condition', result };
+    }
+  }
+}
+
+export interface ConditionExplanation {
+  description: string;
+  result: boolean;
+  value?: number | null;
+  children?: ConditionExplanation[];
 }

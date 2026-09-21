@@ -7,7 +7,9 @@ import {
   Funds,
   HistoricalDataParams,
   Holding,
+  IndexUnderlying,
   ModifyOrderRequest,
+  OptionChain,
   Order,
   OrderRequest,
   OrderResponse,
@@ -99,5 +101,13 @@ export class ZerodhaAdapter implements BrokerAdapter {
 
   getHistoricalData(params: HistoricalDataParams): Promise<Candle[]> {
     return brokerService.getBrokerHistoricalData('zerodha', this.credentials(), params);
+  }
+
+  getOptionChainExpiries(underlying: IndexUnderlying): Promise<string[]> {
+    return brokerService.getBrokerOptionChainExpiries('zerodha', this.credentials(), underlying);
+  }
+
+  getOptionChain(underlying: IndexUnderlying, expiry?: string): Promise<OptionChain> {
+    return brokerService.getBrokerOptionChain('zerodha', this.credentials(), underlying, expiry);
   }
 }

@@ -144,6 +144,34 @@ export interface HistoricalDataParams {
   to: Date;
 }
 
+export type IndexUnderlying = 'NIFTY' | 'BANKNIFTY' | 'FINNIFTY' | 'MIDCPNIFTY' | 'SENSEX';
+
+export interface OptionLeg {
+  tradingSymbol: string | null;
+  exchange: string;
+  ltp: number;
+  bid: number;
+  ask: number;
+  oi: number;
+  volume: number;
+  iv?: number;
+  lotSize: number | null;
+}
+
+export interface OptionChainStrike {
+  strike: number;
+  call: OptionLeg | null;
+  put: OptionLeg | null;
+}
+
+export interface OptionChain {
+  underlying: string;
+  exchange: string;
+  expiry: string;
+  underlyingLtp: number;
+  strikes: OptionChainStrike[];
+}
+
 export interface BrokerAdapter {
   readonly brokerName: string;
 
@@ -165,4 +193,10 @@ export interface BrokerAdapter {
 
   /** Historical OHLCV candles — the data source for chart previews and backtesting. */
   getHistoricalData(params: HistoricalDataParams): Promise<Candle[]>;
+
+  /** Expiry dates (YYYY-MM-DD) currently listed for this index underlying. */
+  getOptionChainExpiries(underlying: IndexUnderlying): Promise<string[]>;
+
+  /** Full option chain (all strikes, CE+PE) for one index underlying/expiry. Omit expiry for the nearest one. */
+  getOptionChain(underlying: IndexUnderlying, expiry?: string): Promise<OptionChain>;
 }

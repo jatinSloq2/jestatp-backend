@@ -10,6 +10,15 @@ export const backtestRequestSchema = Joi.object({
   // (e.g. a strategy using sma(50) needs warmup >= 50). Ignored for DSL strategies.
   params: Joi.object().optional(),
   warmup: Joi.number().integer().min(1).max(500).optional(),
+  // 'standard' (default) is a normal single-pass backtest. 'walk_forward'
+  // (DSL strategies only, see backtestEngine.ts's runWalkForward) splits the
+  // range into consecutive train/test folds. 'monte_carlo' runs a normal
+  // backtest first, then reshuffles its trade order `runs` times to show a
+  // distribution of outcomes rather than one number.
+  mode: Joi.string().valid('standard', 'walk_forward', 'monte_carlo').optional(),
+  folds: Joi.number().integer().min(2).max(10).optional(), // walk_forward only
+  testFraction: Joi.number().min(0.1).max(0.9).optional(), // walk_forward only
+  runs: Joi.number().integer().min(50).max(2000).optional(), // monte_carlo only
 });
 
 /**

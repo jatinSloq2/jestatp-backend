@@ -4,7 +4,7 @@ import { ApiError } from '../../utils/ApiError';
 import { encrypt } from '../../utils/crypto';
 import { buildAdapterForConnect, buildBrokerAdapter } from './adapters/brokerAdapter.factory';
 import { ZerodhaAdapter } from './adapters/zerodha.adapter';
-import { Candle, HistoricalDataParams } from './adapters/brokerAdapter.interface';
+import { Candle, HistoricalDataParams, IndexUnderlying } from './adapters/brokerAdapter.interface';
 import { computeTokenExpiry } from './tokenExpiry';
 import { raiseAlert } from '../alerts/alerting.service';
 
@@ -231,6 +231,59 @@ export async function getQuote(userId: string, broker: BrokerName, tradingSymbol
     const quote = await adapter.getQuote(tradingSymbol, exchange);
     void recordDataPlanStatus(connection.id, true);
     return quote;
+  } catch (err) {
+    if (err instanceof ApiError && err.errorCode === 'DATA_PLAN_REQUIRED') {
+      void recordDataPlanStatus(connection.id, false);
+      throw ApiError.forbidden(err.message);
+    }
+    if (err instanceof ApiError && err.errorCode === 'SESSION_EXPIRED') {
+      await markSessionExpired(connection);
+      throw ApiError.badRequest(`Your ${broker} session has expired — please reconnect your account.`);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Expiry dates currently listed for one index underlying — populates the
+ * options-chain page's expiry picker. Same plan-required/session-expired
+ * handling as every other live market-data call above.
+ */
+export async function getOptionChainExpiries(userId: string, broker: BrokerName, underlying: IndexUnderlying) {
+  const connection = await getActiveConnection(userId, broker);
+  const adapter = buildBrokerAdapter(connection);
+  try {
+    const expiries = await adapter.getOptionChainExpiries(underlying);
+    void recordDataPlanStatus(connection.id, true);
+    return expiries;
+  } catch (err) {
+    if (err instanceof ApiError && err.errorCode === 'DATA_PLAN_REQUIRED') {
+      void recordDataPlanStatus(connection.id, false);
+      throw ApiError.forbidden(err.message);
+    }
+    if (err instanceof ApiError && err.errorCode === 'SESSION_EXPIRED') {
+      await markSessionExpired(connection);
+      throw ApiError.badRequest(`Your ${broker} session has expired — please reconnect your account.`);
+    }
+    throw err;
+  }
+}
+
+/**
+ * The full live option chain (every strike, CE+PE) for one index
+ * underlying/expiry — the data source for the options-chain page. Never
+ * cached in Postgres (unlike holdings/positions/orders): this is
+ * deliberately always a live broker call since the whole point of the page
+ * is real-time OI/bid-ask, and it's polled on an interval from the client
+ * rather than kept warm server-side.
+ */
+export async function getOptionChain(userId: string, broker: BrokerName, underlying: IndexUnderlying, expiry?: string) {
+  const connection = await getActiveConnection(userId, broker);
+  const adapter = buildBrokerAdapter(connection);
+  try {
+    const chain = await adapter.getOptionChain(underlying, expiry);
+    void recordDataPlanStatus(connection.id, true);
+    return chain;
   } catch (err) {
     if (err instanceof ApiError && err.errorCode === 'DATA_PLAN_REQUIRED') {
       void recordDataPlanStatus(connection.id, false);

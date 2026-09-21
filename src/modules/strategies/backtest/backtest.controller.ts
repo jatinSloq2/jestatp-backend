@@ -5,7 +5,7 @@ import { AuthenticatedRequest } from '../../../middlewares/auth.middleware';
 import { BrokerName } from '../../../models/brokerConnection.model';
 import { getStrategy } from '../strategy.service';
 import { getHistoricalCandles } from '../../brokers/broker.service';
-import { runBacktest } from './backtestEngine';
+import { runBacktest, runMonteCarlo, runWalkForward } from './backtestEngine';
 import { runPythonBacktest } from './pythonBacktestEngine';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -45,6 +45,7 @@ export const runBacktestHandler = asyncHandler(async (req: AuthenticatedRequest,
   const strategy = await getStrategy(req.user!.id, req.params.id);
   const broker = (req.body.broker as BrokerName | undefined) ?? strategy.broker;
   const { from, to } = resolveDateRange(strategy.timeframe, req.body.from, req.body.to);
+  const mode: 'standard' | 'walk_forward' | 'monte_carlo' = req.body.mode ?? 'standard';
 
   const candles = await getHistoricalCandles(req.user!.id, broker, {
     tradingSymbol: strategy.instrument,
@@ -61,24 +62,48 @@ export const runBacktestHandler = asyncHandler(async (req: AuthenticatedRequest,
     );
   }
 
+  const definition = strategy.toStrategyDefinition();
+  const envelope = {
+    strategyId: strategy.id,
+    broker,
+    timeframe: strategy.timeframe,
+    instrument: strategy.instrument,
+    exchange: strategy.exchange,
+    from: from.toISOString(),
+    to: to.toISOString(),
+    mode,
+  };
+
+  if (mode === 'walk_forward') {
+    if (strategy.language === 'python') {
+      throw ApiError.badRequest('Walk-forward testing is only available for rule-builder (DSL) strategies right now, not Python strategies.');
+    }
+    const walkForward = runWalkForward(definition, candles, req.body.folds ?? 3, req.body.testFraction ?? 0.3);
+    return res.json({ success: true, data: { ...envelope, walkForward } });
+  }
+
+  if (mode === 'monte_carlo') {
+    const base =
+      strategy.language === 'python'
+        ? await runPythonBacktest(strategy.pythonCode!, definition, candles, req.body.params ?? {}, req.body.warmup ?? 20, req.user!.id)
+        : runBacktest(definition, candles);
+    const monteCarlo = runMonteCarlo(base, definition.risk, req.body.runs ?? 500);
+    return res.json({ success: true, data: { ...envelope, ...base, monteCarlo } });
+  }
+
   const result =
     strategy.language === 'python'
-      ? await runPythonBacktest(strategy.pythonCode!, strategy.toStrategyDefinition(), candles, req.body.params ?? {}, req.body.warmup ?? 20)
-      : runBacktest(strategy.toStrategyDefinition(), candles);
+      ? await runPythonBacktest(
+          strategy.pythonCode!,
+          definition,
+          candles,
+          req.body.params ?? {},
+          req.body.warmup ?? 20,
+          req.user!.id,
+        )
+      : runBacktest(definition, candles);
 
-  res.json({
-    success: true,
-    data: {
-      strategyId: strategy.id,
-      broker,
-      timeframe: strategy.timeframe,
-      instrument: strategy.instrument,
-      exchange: strategy.exchange,
-      from: from.toISOString(),
-      to: to.toISOString(),
-      ...result,
-    },
-  });
+  res.json({ success: true, data: { ...envelope, ...result } });
 });
 
 /**
@@ -111,7 +136,7 @@ export const previewBacktestHandler = asyncHandler(async (req: AuthenticatedRequ
 
   const result =
     language === 'python'
-      ? await runPythonBacktest(req.body.pythonCode, { risk: req.body.risk }, candles, req.body.params ?? {}, req.body.warmup ?? 20)
+      ? await runPythonBacktest(req.body.pythonCode, { risk: req.body.risk }, candles, req.body.params ?? {}, req.body.warmup ?? 20, req.user!.id)
       : runBacktest(
           {
             instrument: req.body.instrument,

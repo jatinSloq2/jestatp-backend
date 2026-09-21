@@ -40,6 +40,8 @@ export interface ExecuteStrategyParams {
   position?: SandboxPosition | null;
   /** backtest only: bars required before the first on_bar() call (see sandbox-service's ExecuteRequest.warmup). */
   warmup?: number;
+  /** name -> value-per-bar, same length/order as `bars` — see customIndicators.service.ts, which precomputes each referenced custom indicator's series once before the strategy run so ctx.custom("name") is a plain lookup inside the sandbox. */
+  customSeries?: Record<string, (number | null)[]>;
 }
 
 export interface ExecuteStrategyResult {
@@ -94,10 +96,38 @@ export function executeStrategy(params: ExecuteStrategyParams): Promise<ExecuteS
     params: params.params ?? {},
     position: params.position ?? null,
     warmup: params.warmup ?? 1,
+    customSeries: params.customSeries ?? {},
   });
 }
 
 /** Cheap syntax/shape check used when a user saves a python strategy — see strategy.service.ts. */
 export function validateStrategyCode(code: string): Promise<{ ok: boolean; error: string | null }> {
   return post('/validate', { code });
+}
+
+export interface IndicatorData {
+  timestamp: number[];
+  open: number[];
+  high: number[];
+  low: number[];
+  close: number[];
+  volume: number[];
+}
+
+export interface ExecuteIndicatorResult {
+  ok: boolean;
+  series: (number | null)[];
+  error: string | null;
+  traceback: string | null;
+}
+
+/**
+ * Runs a custom indicator's `calculate(data, params)` once over `data`
+ * (see sandbox-service's app/sdk/indicator_contract.py). Used both by
+ * customIndicators.service.ts's validate/preview endpoints (authoring
+ * time) and, precomputed once per backtest/live run, to build the
+ * `customSeries` map passed into `executeStrategy` above.
+ */
+export function executeIndicator(code: string, data: IndicatorData, params: Record<string, unknown> = {}): Promise<ExecuteIndicatorResult> {
+  return post('/execute-indicator', { code, data, params });
 }

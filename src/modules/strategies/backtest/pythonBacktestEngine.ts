@@ -1,6 +1,7 @@
 import { Candle } from '../../brokers/adapters/brokerAdapter.interface';
 import { StrategyDefinition } from '../dsl/types';
 import { executeStrategy } from '../sandbox/sandboxService.client';
+import { resolveCustomSeriesForCode } from '../customIndicators/customIndicators.service';
 import { ApiError } from '../../../utils/ApiError';
 import { BacktestResult, simulateTrades } from './backtestEngine';
 
@@ -20,6 +21,12 @@ import { BacktestResult, simulateTrades } from './backtestEngine';
  * still calls on_bar() for earlier bars too (so `ctx.state` accumulates
  * correctly), it just won't be found in `signals` unless it explicitly
  * returns one.
+ *
+ * `userId` is only used to resolve any `ctx.custom("name")` references in
+ * `pythonCode` against that user's saved custom indicators (see
+ * customIndicators.service.ts) — omit it (e.g. an anonymous/preview call
+ * that hasn't been tied to a user yet) and ctx.custom() will just return
+ * None for every name.
  */
 export async function runPythonBacktest(
   pythonCode: string,
@@ -27,13 +34,17 @@ export async function runPythonBacktest(
   candles: Candle[],
   params: Record<string, unknown> = {},
   warmup = 1,
+  userId?: string,
 ): Promise<BacktestResult & { logs: string[] }> {
+  const customSeries = userId ? await resolveCustomSeriesForCode(userId, pythonCode, candles) : {};
+
   const result = await executeStrategy({
     code: pythonCode,
     bars: candles.map((c) => ({ timestamp: c.timestamp, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume })),
     mode: 'backtest',
     params,
     warmup,
+    customSeries,
   });
 
   if (!result.ok) {

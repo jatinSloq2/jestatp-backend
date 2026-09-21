@@ -5,6 +5,7 @@ import { OrderRequest, Candle } from '../../brokers/adapters/brokerAdapter.inter
 import { placeOrder } from '../../orders/orderPlacement.service';
 import { raiseAlert } from '../../alerts/alerting.service';
 import { executeStrategy } from '../sandbox/sandboxService.client';
+import { resolveCustomSeriesForCode } from '../customIndicators/customIndicators.service';
 import { ConditionEvaluator } from '../backtest/conditionEvaluator';
 import { simulateTrades, BacktestTrade, OpenPositionSnapshot } from '../backtest/backtestEngine';
 import { logger } from '../../../utils/logger';
@@ -85,12 +86,14 @@ export async function runStrategyTick(strategy: Strategy): Promise<void> {
   let newPythonState = runtimeState.pythonState;
 
   if (strategy.language === 'python') {
+    const customSeries = await resolveCustomSeriesForCode(strategy.userId, strategy.pythonCode!, candles);
     const result = await executeStrategy({
       code: strategy.pythonCode!,
       bars: candles.map((c) => ({ timestamp: c.timestamp, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume })),
       mode: 'backtest',
       state: runtimeState.pythonState,
       warmup,
+      customSeries,
     });
 
     if (!result.ok) {

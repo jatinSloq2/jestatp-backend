@@ -7,6 +7,8 @@ import {
   connectGrowwSchema,
   connectZerodhaCallbackSchema,
   connectZerodhaInitSchema,
+  optionChainExpiriesQuerySchema,
+  optionChainQuerySchema,
   quoteQuerySchema,
 } from './broker.validation';
 import {
@@ -14,6 +16,8 @@ import {
   connectGrowwHandler,
   connectZerodhaHandler,
   disconnectBrokerHandler,
+  getOptionChainExpiriesHandler,
+  getOptionChainHandler,
   getQuoteHandler,
   listMyConnectionsHandler,
   listSupportedBrokersHandler,
@@ -250,5 +254,71 @@ router.post('/:broker/sync', validate(brokerParamSchema, 'params'), syncBrokerHa
  *       403: { description: Broker account isn't subscribed to the data plan needed for live pricing }
  */
 router.get('/:broker/quote', validate(brokerParamSchema, 'params'), validate(quoteQuerySchema, 'query'), getQuoteHandler);
+
+/**
+ * @openapi
+ * /brokers/{broker}/option-chain/expiries:
+ *   get:
+ *     tags: [Brokers]
+ *     summary: List available expiry dates for an index's option chain
+ *     description: >
+ *       Populates the options-chain page's expiry picker. Always a live broker call — never
+ *       cached in Postgres.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: broker
+ *         required: true
+ *         schema: { type: string, enum: [dhan, zerodha, groww] }
+ *       - in: query
+ *         name: underlying
+ *         required: true
+ *         schema: { type: string, enum: [NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, SENSEX] }
+ *     responses:
+ *       200: { description: Sorted list of expiry dates (YYYY-MM-DD) }
+ *       400: { description: No active connection, or session expired }
+ *       403: { description: Broker account isn't subscribed to the data plan needed for live pricing }
+ */
+router.get(
+  '/:broker/option-chain/expiries',
+  validate(brokerParamSchema, 'params'),
+  validate(optionChainExpiriesQuerySchema, 'query'),
+  getOptionChainExpiriesHandler,
+);
+
+/**
+ * @openapi
+ * /brokers/{broker}/option-chain:
+ *   get:
+ *     tags: [Brokers]
+ *     summary: Live option chain (every strike, CE+PE) for one index underlying
+ *     description: >
+ *       The data source for the options-chain page. Deliberately never cached in Postgres,
+ *       unlike holdings/positions/orders — the client polls this on an interval instead.
+ *       Omit `expiry` to get the nearest one.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: broker
+ *         required: true
+ *         schema: { type: string, enum: [dhan, zerodha, groww] }
+ *       - in: query
+ *         name: underlying
+ *         required: true
+ *         schema: { type: string, enum: [NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, SENSEX] }
+ *       - in: query
+ *         name: expiry
+ *         schema: { type: string, example: "2026-09-25" }
+ *     responses:
+ *       200: { description: Option chain, sorted by strike }
+ *       400: { description: No active connection, or session expired }
+ *       403: { description: Broker account isn't subscribed to the data plan needed for live pricing }
+ */
+router.get(
+  '/:broker/option-chain',
+  validate(brokerParamSchema, 'params'),
+  validate(optionChainQuerySchema, 'query'),
+  getOptionChainHandler,
+);
 
 export default router;

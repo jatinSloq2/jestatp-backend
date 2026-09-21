@@ -7,7 +7,9 @@ import {
   Funds,
   HistoricalDataParams,
   Holding,
+  IndexUnderlying,
   ModifyOrderRequest,
+  OptionChain,
   Order,
   OrderRequest,
   OrderResponse,
@@ -90,5 +92,13 @@ export class GrowwAdapter implements BrokerAdapter {
 
   getHistoricalData(params: HistoricalDataParams): Promise<Candle[]> {
     return brokerService.getBrokerHistoricalData('groww', this.credentials(), params);
+  }
+
+  getOptionChainExpiries(underlying: IndexUnderlying): Promise<string[]> {
+    return brokerService.getBrokerOptionChainExpiries('groww', this.credentials(), underlying);
+  }
+
+  getOptionChain(underlying: IndexUnderlying, expiry?: string): Promise<OptionChain> {
+    return brokerService.getBrokerOptionChain('groww', this.credentials(), underlying, expiry);
   }
 }

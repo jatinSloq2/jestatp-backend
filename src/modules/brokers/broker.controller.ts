@@ -3,6 +3,7 @@ import { asyncHandler } from '../../utils/asyncHandler';
 import { AuthenticatedRequest } from '../../middlewares/auth.middleware';
 import * as brokerService from './broker.service';
 import { BrokerName } from '../../models/brokerConnection.model';
+import { IndexUnderlying } from './adapters/brokerAdapter.interface';
 import { enqueueConnectionSync } from '../../queues/brokerSync.queue';
 
 export const listSupportedBrokersHandler = asyncHandler(async (_req: AuthenticatedRequest, res: Response) => {
@@ -68,4 +69,27 @@ export const getQuoteHandler = asyncHandler(async (req: AuthenticatedRequest, re
   const { symbol, exchange } = req.query as { symbol: string; exchange?: string };
   const quote = await brokerService.getQuote(req.user!.id, broker, symbol, exchange);
   res.json({ success: true, data: quote });
+});
+
+/**
+ * Expiry dates for the options-chain page's expiry picker. Always a live
+ * broker call (see broker.service.ts) — never cached in Postgres.
+ */
+export const getOptionChainExpiriesHandler = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const broker = req.params.broker as BrokerName;
+  const { underlying } = req.query as { underlying: IndexUnderlying };
+  const expiries = await brokerService.getOptionChainExpiries(req.user!.id, broker, underlying);
+  res.json({ success: true, data: expiries });
+});
+
+/**
+ * The full live option chain (every strike, CE+PE) for one index
+ * underlying — the options-chain page polls this on an interval. Omit
+ * `expiry` for the nearest one.
+ */
+export const getOptionChainHandler = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const broker = req.params.broker as BrokerName;
+  const { underlying, expiry } = req.query as { underlying: IndexUnderlying; expiry?: string };
+  const chain = await brokerService.getOptionChain(req.user!.id, broker, underlying, expiry);
+  res.json({ success: true, data: chain });
 });

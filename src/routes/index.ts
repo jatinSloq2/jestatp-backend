@@ -7,6 +7,7 @@ import positionRoutes from '../modules/positions/position.routes';
 import holdingRoutes from '../modules/holdings/holding.routes';
 import fundRoutes from '../modules/funds/fund.routes';
 import strategyRoutes from '../modules/strategies/strategy.routes';
+import customIndicatorRoutes from '../modules/strategies/customIndicators/customIndicators.routes';
 import alertRoutes from '../modules/alerts/alert.routes';
 
 const router = Router();
@@ -19,6 +20,7 @@ router.use('/positions', positionRoutes);
 router.use('/holdings', holdingRoutes);
 router.use('/funds', fundRoutes);
 router.use('/strategies', strategyRoutes);
+router.use('/custom-indicators', customIndicatorRoutes);
 router.use('/alerts', alertRoutes);
 
 export default router;

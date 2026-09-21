@@ -7,7 +7,9 @@ import {
   Funds,
   HistoricalDataParams,
   Holding,
+  IndexUnderlying,
   ModifyOrderRequest,
+  OptionChain,
   Order,
   OrderRequest,
   OrderResponse,
@@ -91,5 +93,13 @@ export class DhanAdapter implements BrokerAdapter {
 
   getHistoricalData(params: HistoricalDataParams): Promise<Candle[]> {
     return brokerService.getBrokerHistoricalData('dhan', this.credentials(), params);
+  }
+
+  getOptionChainExpiries(underlying: IndexUnderlying): Promise<string[]> {
+    return brokerService.getBrokerOptionChainExpiries('dhan', this.credentials(), underlying);
+  }
+
+  getOptionChain(underlying: IndexUnderlying, expiry?: string): Promise<OptionChain> {
+    return brokerService.getBrokerOptionChain('dhan', this.credentials(), underlying, expiry);
   }
 }

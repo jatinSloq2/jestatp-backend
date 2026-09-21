@@ -8,7 +8,9 @@ import {
   Funds,
   HistoricalDataParams,
   Holding,
+  IndexUnderlying,
   ModifyOrderRequest,
+  OptionChain,
   Order,
   OrderRequest,
   OrderResponse,
@@ -189,4 +191,21 @@ export async function getBrokerHistoricalData(
     from: params.from.toISOString(),
     to: params.to.toISOString(),
   });
+}
+
+export async function getBrokerOptionChainExpiries(
+  broker: BrokerName,
+  credentials: BrokerCredentials,
+  underlying: IndexUnderlying,
+): Promise<string[]> {
+  return post(`/brokers/${broker}/option-chain/expiries`, { credentials, underlying });
+}
+
+export async function getBrokerOptionChain(
+  broker: BrokerName,
+  credentials: BrokerCredentials,
+  underlying: IndexUnderlying,
+  expiry?: string,
+): Promise<OptionChain> {
+  return post(`/brokers/${broker}/option-chain`, { credentials, underlying, expiry });
 }
